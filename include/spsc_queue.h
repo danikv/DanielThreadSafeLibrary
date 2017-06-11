@@ -1,5 +1,5 @@
-#pragma once
-
+#ifndef SPSCQUEUE_H_
+#define SPSCQUEUE_H_
 
 #include <array>
 #include <atomic>
@@ -8,11 +8,11 @@
 #include "ithread_safe_queue.h"
 
 template<typename T, const int queue_size>
-class SpsqQueue : public IThreadSafeQueue<T>
+class SpscQueue : public IThreadSafeQueue<T>
 {
 public:
 
-	SpsqQueue()
+	SpscQueue()
 	: writer_position(0)
 	, reader_position(0)
 	, current_queue_size(0)
@@ -20,10 +20,10 @@ public:
 		initalizeQueue();
 	}
 
-	SpsqQueue(SpsqQueue<T,queue_size>&) = delete;
-	SpsqQueue(SpsqQueue<T,queue_size>&&) = default;
+	SpscQueue(SpscQueue<T,queue_size>&) = delete;
+	SpscQueue(SpscQueue<T,queue_size>&&) = default;
 
-	~SpsqQueue()
+	~SpscQueue()
 	{
 		for (int i = 0; i < queue_size; ++i)
 			delete queue[i];
@@ -33,8 +33,14 @@ public:
 	{
 		throwIfFull();
 		*writer_position = element;
-		writer_position = calculateNextPosition(writer_position);
-		current_queue_size++;
+		increasePosition();
+	}
+
+	void push(T&& element) override
+	{
+		throwIfFull();
+		*writer_position = std::move(element);
+		increasePosition();
 	}
 
 	void pop() override
@@ -43,7 +49,7 @@ public:
 		unsafePop();
 	}
 
-	void popOnSuccses(std::function<bool(const T&)> function) override
+	void popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
 		throwIfEmpty();
 		if(function(*reader_position))
@@ -58,11 +64,19 @@ public:
 		const auto calculate_next_position = [&](){
 			unsafePop();
 		};
-		const auto end_function = [&](const T* end_index) {
-			return  reader_position == end_index;
+		const auto end_function = [&]() {
+			return  isEmpty();
 		};
-		return std::make_unique<ThreadSafeQueueIterator<T>>(std::bind(end_function, writer_position),
-				calculate_next_position, current_position);
+		return std::make_unique<ThreadSafeQueueIterator<T>>(end_function, calculate_next_position, current_position);
+	}
+
+	void consumeAll(const std::function<void(const T&)>& function)
+	{
+		while(!isEmpty())
+		{
+			function(*reader_position);
+			unsafePop();
+		}
 	}
 
 	bool isEmpty() const override
@@ -84,7 +98,7 @@ private:
 		if(current_position == queue.back())
 			current_position = queue.front();
 		else
-			current_position++;
+			current_position += sizeof(T*);
 		return current_position;
 	}
 
@@ -111,8 +125,16 @@ private:
 		current_queue_size--;
 	}
 
+	void increasePosition()
+	{
+		writer_position = calculateNextPosition(writer_position);
+		current_queue_size++;
+	}
+
 	std::array<T*, queue_size> queue;
 	T* writer_position;
 	T* reader_position;
 	std::atomic<int> current_queue_size;
 };
+
+#endif

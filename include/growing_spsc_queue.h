@@ -1,4 +1,5 @@
-#pragma once
+#ifndef GROWINGSPSCQUEUE_H_
+#define GROWINGSPSCQUEUE_H_
 
 #include "ithread_safe_queue.h"
 #include "thread_safe_queue_iterator.h"
@@ -26,28 +27,37 @@ public:
 	, head(nullptr)
 	, current_queue_size(0)
 	{
-		end = new node<T>();
-		head = end;
+		initalizeQueue();
 	}
 
 	GrowingSpscQueue(GrowingSpscQueue<T>&) = delete;
 	GrowingSpscQueue(GrowingSpscQueue<T>&&) = default;
 
+	~GrowingSpscQueue()
+	{
+		while(!isEmpty())
+			unsafePop();
+	}
+
 	void push(const T& element) override
 	{
 		end->data = new T(element);
-		end->next = new node<T>();
-		end = end->next;
-		current_queue_size++;
+		increasePosition();
 	}
 	
+	void push(T&& element) override
+	{
+		end->data = new T(std::move(element));
+		increasePosition();
+	}
+
 	void pop() override
 	{
 		throwIfEmpty();
 		unsafePop();
 	}
 
-	void popOnSuccses(std::function<bool(const T&)> function) override
+	void popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
 		throwIfEmpty();
 		if(function(*head->data))
@@ -57,16 +67,24 @@ public:
 	std::unique_ptr<IThreadSafeQueueIterator<T>> popElements() override
 	{
 		const auto current_position = [&]() {
-                        return head->data;
-                };
-                const auto calculate_next_position = [&](){
-                        unsafePop();
-                };
-                const auto end_function = [&]() {
-                        return isEmpty();
-                };
-                return std::make_unique<ThreadSafeQueueIterator<T>>(end_function                        ,calculate_next_position, current_position);
-	
+			return head->data;
+		};
+		const auto calculate_next_position = [&](){
+				unsafePop();
+		};
+		const auto end_function = [&]() {
+				return isEmpty();
+		};
+		return std::make_unique<ThreadSafeQueueIterator<T>>(end_function, calculate_next_position, current_position);
+	}
+
+	void consumeAll(const std::function<void(const T&)>& function)
+	{
+		while(!isEmpty())
+		{
+			function(*(head->data));
+			unsafePop();
+		}
 	}
 
 	bool isEmpty() const override
@@ -83,17 +101,34 @@ private:
 	
 	void unsafePop()
 	{
+		const auto* element = head;
 		head = head->next;
 		current_queue_size--;
+		delete element;
 	}
 
-	void throwIfEmpty()
+	void throwIfEmpty() const
 	{
 		if(isEmpty())
 			throw QueueEmpty();
+	}
+
+	void initalizeQueue()
+	{
+		end = new node<T>();
+		head = end;
+	}
+
+	void increasePosition()
+	{
+		end->next = new node<T>();
+		end = end->next;
+		current_queue_size++;
 	}
 
 	node<T> * end;
 	node<T> * head;
 	std::atomic<int> current_queue_size;		
 };
+
+#endif

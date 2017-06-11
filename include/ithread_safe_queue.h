@@ -20,12 +20,16 @@ public:
 
 	virtual void push(const T&) = 0;
 
+	virtual void push(T&&) = 0;
+
 	virtual void pop() = 0;
 
-	virtual void popOnSuccses(std::function<bool(const T&)>) = 0;
+	virtual void popOnSuccses(const std::function<bool(const T&)>&) = 0;
 
 	//the iterator takes ownership over the queue, which means after this operation the queue will remain empty.
 	virtual std::unique_ptr<IThreadSafeQueueIterator<T>> popElements() = 0;
+
+	virtual void consumeAll(const std::function<void(const T&)>&) = 0;
 
 	virtual bool isEmpty() const = 0;
 };
