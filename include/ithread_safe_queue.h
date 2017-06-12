@@ -27,7 +27,7 @@ public:
 
 	virtual void consumeAll(const std::function<void(const T&)>&) = 0;
 
-	virtual bool isEmpty() const = 0;
+	virtual const size_t getSize() const = 0;
 
 };
 

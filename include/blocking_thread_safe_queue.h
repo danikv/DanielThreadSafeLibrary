@@ -6,39 +6,41 @@
 #include <atomic>
 #include "iblocking_thread_safe_queue.h"
 
+using size_t = std::size_t;
+
 template<typename T, typename QueueType>
 class BlockingThreadSafeQueue : public IBlockingThreadSafeQueue<T>
 {
 
 public:
-	BlockingThreadSafeQueue(const int _notify_size)
+	BlockingThreadSafeQueue(const size_t& _notify_size)
 	: is_queue_alive(true)
 	, notify_size(_notify_size)
 	{
 	}
 
-	void push(const T& element) override
+	bool push(const T& element) override
 	{
-		queue.push(element);
-		if(shouldNotify())
+		bool result = queue.push(element);
+		if(unlikely(shouldNotify() && result))
 			condition.notify_one();
 	}
 	
-	void push(T&& element) override
+	bool push(T&& element) override
 	{
-		queue.push(std::move(element));
-		if(shouldNotify())
+		bool result = queue.push(std::move(element));
+		if(unlikely(shouldNotify() && result))
 			condition.notify_one();
 	}
 	
-	void pop() override
+	bool pop() override
 	{
-		queue.pop();
+		return queue.pop();
 	}
 	
-	void popOnSuccses(const std::function<bool(const T&)>& function) override
+	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		queue.popOnSuccses(function);
+		return queue.popOnSuccses(function);
 	}
 	
 	void consumeAll(const std::function<void(const T&)>& function) override
@@ -61,7 +63,7 @@ public:
 		condition.notify_all();
 	}
 	
-	const int getSize() const override
+	const size_t getSize() const override
 	{
 		queue.getSize();
 	}
@@ -76,7 +78,7 @@ private:
 	std::mutex locker;
 	std::condition_variable condition;
 	std::atomic<bool> is_queue_alive;
-	const int notify_size;
+	const size_t notify_size;
 	QueueType queue;
 
 };
