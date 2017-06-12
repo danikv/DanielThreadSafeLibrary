@@ -2,7 +2,6 @@
 #define GROWINGSPSCQUEUE_H_
 
 #include "ithread_safe_queue.h"
-#include "thread_safe_queue_iterator.h"
 #include "queue_exceptions.h"
 
 template<typename T>
@@ -64,21 +63,7 @@ public:
 			unsafePop();
 	}
 	
-	std::unique_ptr<IThreadSafeQueueIterator<T>> popElements() override
-	{
-		const auto current_position = [&]() {
-			return head->data;
-		};
-		const auto calculate_next_position = [&](){
-				unsafePop();
-		};
-		const auto end_function = [&]() {
-				return isEmpty();
-		};
-		return std::make_unique<ThreadSafeQueueIterator<T>>(end_function, calculate_next_position, current_position);
-	}
-
-	void consumeAll(const std::function<void(const T&)>& function)
+	void consumeAll(const std::function<void(const T&)>& function) override
 	{
 		while(!isEmpty())
 		{
@@ -87,16 +72,16 @@ public:
 		}
 	}
 
-	bool isEmpty() const override
-	{
-		return getSize() == 0;
-	}
-		
-private:
-
-	const int getSize() const
+	const int getSize() const override
 	{
 		return current_queue_size.load(std::memory_order_acquire);
+	}
+
+private:
+
+	bool isEmpty() const
+	{
+		return getSize() == 0;
 	}
 	
 	void unsafePop()

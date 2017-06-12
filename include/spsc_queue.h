@@ -3,11 +3,14 @@
 
 #include <array>
 #include <atomic>
-#include "queue_exceptions.h"
-#include "thread_safe_queue_iterator.h"
 #include "ithread_safe_queue.h"
+#include <boost/lockfree/detail/branch_hints.hpp>
 
-template<typename T, const int queue_size>
+#define mem_relaxed std::memory_order_relaxed
+
+using boost::lockfree::detail::unlikely;
+
+template<typename T, const std::size_t queue_size>
 class SpscQueue : public IThreadSafeQueue<T>
 {
 public:
@@ -15,7 +18,6 @@ public:
 	SpscQueue()
 	: writer_position(0)
 	, reader_position(0)
-	, current_queue_size(0)
 	{
 		initalizeQueue();
 	}
@@ -29,59 +31,93 @@ public:
 			delete queue[i];
 	}
 
-	void push(const T& element) override
+	bool push(const T& element) override
 	{
-		throwIfFull();
-		*writer_position = element;
-		increasePosition();
+		const auto current_position = writer_position.load(mem_relaxed);
+		const auto next = calculateNextPosition(current_position);
+		*queue[current_position] = element;
+		if(isFullWriter())
+			return false;
+		writer_position.store(next, mem_relaxed);
+		return true;
 	}
 
-	void push(T&& element) override
+	bool push(T&& element) override
 	{
-		throwIfFull();
-		*writer_position = std::move(element);
-		increasePosition();
+		const auto current_position = writer_position.load(mem_relaxed);
+                auto next = calculateNextPosition(current_position);
+                *queue[current_position] = element;
+                if(isFullWriter())
+                        return false;
+                writer_position.store(next, mem_relaxed);
+		return true;
 	}
 
-	void pop() override
+	bool pop() override
 	{
-		throwIfEmpty();
-		unsafePop();
+		auto const next = calculateNextPosition(reader_position.load(mem_relaxed));
+		if(isEmptyReader())
+			return false;
+		reader_position.store(next, mem_relaxed);
+		return true;
 	}
 
-	void popOnSuccses(const std::function<bool(const T&)>& function) override
+	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		throwIfEmpty();
-		if(function(*reader_position))
-			unsafePop();
-	}
-
-	std::unique_ptr<IThreadSafeQueueIterator<T>> popElements() override
-	{
-		const auto current_position = [&]() {
-			return reader_position;
-		};
-		const auto calculate_next_position = [&](){
-			unsafePop();
-		};
-		const auto end_function = [&]() {
-			return  isEmpty();
-		};
-		return std::make_unique<ThreadSafeQueueIterator<T>>(end_function, calculate_next_position, current_position);
+		const auto current_position = reader_position.load(mem_relaxed);
+		bool result = function(*queue[current_position]);
+		auto const next = calculateNextPosition(current_position);
+		if(isEmptyReader())
+			return false;
+		if(result)
+			reader_position.store(next, mem_relaxed);
+		return true;
 	}
 
 	void consumeAll(const std::function<void(const T&)>& function)
 	{
-		while(!isEmpty())
+		while(!isEmptyReader())
 		{
-			function(*reader_position);
-			unsafePop();
+			auto current_size = getSizeReader();
+			while(current_size > 0)
+			{
+				const auto current_position = reader_position.load(mem_relaxed);
+				function(*queue[current_position]);
+				const auto next = calculateNextPosition(current_position);
+				reader_position.store(next, mem_relaxed);
+				--current_size;
+			}
 		}
+	}
+
+	template<typename Functor>
+	void ConsumeAll(const Functor& function)
+	{
+		static std::size_t size = 0;
+	        while(!isEmptyReader())
+                {
+			auto current_size = getSizeReader();
+			size += current_size;
+			std::cout << "size : " << size << std::endl;
+			while(current_size > 0)
+			{
+                        	const auto current_position = reader_position.load(mem_relaxed);
+                        	function(*queue[current_position]);
+                        	const auto next = calculateNextPosition(current_position);
+                        	reader_position.store(next, mem_relaxed);
+				--current_size;
+                	}
+		}
+
 	}
 
 	bool isEmpty() const override
 	{
-		return getSize() == 0;
+                const auto writer_value = writer_position.load(std::memory_order_acquire);
+                const auto reader_value = reader_position.load(std::memory_order_acquire);
+                if(reader_value == writer_value)
+                        return false;
+                return true;
 	}
 
 private:
@@ -90,51 +126,48 @@ private:
 	{
 		for (int i = 0; i < queue_size; ++i)
 			queue[i] = new T();
-		writer_position = reader_position = queue.front();
 	}
 
-	T* calculateNextPosition(T* current_position)
+	const std::size_t calculateNextPosition(const std::size_t& current_position) const
 	{
-		if(current_position == queue.back())
-			current_position = queue.front();
-		else
-			current_position += sizeof(T*);
-		return current_position;
+		std::size_t ret = current_position + 1;
+		if(unlikely(ret == queue_size))
+			return 0;
+		return ret;
 	}
 
-	void throwIfEmpty() const
+	bool isEmptyReader() const
 	{
-		if(isEmpty())
-			throw QueueEmpty();
+                if(unlikely(getSizeReader() == 0))
+                        return true;
+                return false;
+
 	}
 
-	void throwIfFull() const
+	bool isFullWriter() const
 	{
-		if(getSize() == queue_size)
-			throw QueueFull();
+		const auto writer_value = writer_position.load(mem_relaxed);
+		const auto reader_value = reader_position.load(std::memory_order_acquire) - 1;
+		if(unlikely(writer_value == reader_value | reader_value + queue_size == writer_value))
+			return true;
+		return false;
 	}
 
-	const int getSize() const
+	size_t getSizeReader() const
 	{
-		return current_queue_size.load(std::memory_order_acquire);
-	}
-
-	void unsafePop()
-	{
-		reader_position = calculateNextPosition(reader_position);
-		current_queue_size--;
-	}
-
-	void increasePosition()
-	{
-		writer_position = calculateNextPosition(writer_position);
-		current_queue_size++;
+		const auto writer_value = writer_position.load(std::memory_order_acquire);
+                const auto reader_value = reader_position.load(mem_relaxed);
+		std::cout << "writer : " << writer_value << ", reader : " <<
+		reader_value << std::endl;
+		const std::size_t ret(reader_value - writer_value + queue_size);
+		if(writer_value > reader_value)
+			return ret;
+		return ret - queue_size;
 	}
 
 	std::array<T*, queue_size> queue;
-	T* writer_position;
-	T* reader_position;
-	std::atomic<int> current_queue_size;
+	std::atomic<std::size_t> reader_position;
+	std::atomic<std::size_t> writer_position;
 };
 
 #endif

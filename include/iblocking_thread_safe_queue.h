@@ -9,8 +9,6 @@ class IBlockingThreadSafeQueue : public IThreadSafeQueue<T>
 	
 public:
 	
-	virtual std::unique_ptr<IThreadSafeQueueIterator<T>> blockingPopElements() = 0;
-	
 	virtual void blockingConsumeAll(const std::function<void(const T&)>&) = 0;
 	
 	virtual void notifyReaders() = 0;

@@ -4,75 +4,79 @@
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
+#include "iblocking_thread_safe_queue.h"
 
 template<typename T, typename QueueType>
-class BlockingThreadSafeQueue : public IBlockThreadSafeQueue<T>
+class BlockingThreadSafeQueue : public IBlockingThreadSafeQueue<T>
 {
-	BlockingThreadSafeQueue()
+
+public:
+	BlockingThreadSafeQueue(const int _notify_size)
 	: is_queue_alive(true)
+	, notify_size(_notify_size)
 	{
 	}
 
-	bool push(const T& element)
+	void push(const T& element) override
 	{
 		queue.push(element);
-		condition.notify_one();
+		if(shouldNotify())
+			condition.notify_one();
 	}
 	
-	bool push(T&& element)
+	void push(T&& element) override
 	{
 		queue.push(std::move(element));
-		condition.notify_one();
+		if(shouldNotify())
+			condition.notify_one();
 	}
 	
-	void pop()
+	void pop() override
 	{
 		queue.pop();
 	}
 	
-	void popOnSuccsess(const std::function<bool(const T*)>& function)
+	void popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		queue.popOnSuccsess(function);
+		queue.popOnSuccses(function);
 	}
 	
-	std::unique_ptr<IThreadSafeQueueIterator<T>> popElements()
-	{
-		queue.popElements();
-	}
-		
-	std::unique_ptr<IThreadSafeQueueIterator<T>> blockingPopElements()
-	{
-		std::unique_lock<std::mutex> lock(locker);
-		condition.wait(lock, [&]() {
-			return !is_queue_alive.load(std::memory_order_acquire);
-		});
-		return popElements();
-	}
-	
-	void consumeAll(const std::function<void(const T&)>& function)
+	void consumeAll(const std::function<void(const T&)>& function) override
 	{
 		queue.consumeAll(function);
 	}
 	
-	void blockingConsumeAll(const std::function<void(const T&)>& function)
+	void blockingConsumeAll(const std::function<void(const T&)>& function) override
 	{
 		std::unique_lock<std::mutex> lock(locker);
 		condition.wait(lock, [&]() {
-			return !is_queue_alive.load(std::memory_order_acquire);
+			return (!is_queue_alive.load(std::memory_order_acquire) || !shouldNotify());
 		});
 		consumeAll(function);
 	}
-	
-	bool isEmpty() const
+
+	void notifyReaders() override
 	{
-		queue.isEmpty();
+		is_queue_alive.store(false, std::memory_order_acquire);
+		condition.notify_all();
+	}
+	
+	const int getSize() const override
+	{
+		queue.getSize();
 	}
 
 private:
 
+	bool shouldNotify() const
+	{
+		return notify_size <= getSize();			
+	}
+
 	std::mutex locker;
 	std::condition_variable condition;
 	std::atomic<bool> is_queue_alive;
+	const int notify_size;
 	QueueType queue;
 
 };
