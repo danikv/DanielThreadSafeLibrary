@@ -6,11 +6,13 @@
 #include "ithread_safe_queue.h"
 #include <boost/lockfree/detail/branch_hints.hpp>
 
-#define mem_relaxed std::memory_order_relaxed
-#define mem_acquire std::memory_order_acquire
-#define mem_release std::memory_order_release
+#define MEM_RELAXED std::memory_order_relaxed
+#define MEM_ACQUIRE std::memory_order_acquire
+#define MEM_RELEASE std::memory_order_release
+#define CACHE_LINE_SIZE 64
 
 using boost::lockfree::detail::unlikely;
+using boost::lockfree::detail::likely;
 using size_t = std::size_t;
 
 template<typename T, const std::size_t queue_size>
@@ -36,54 +38,46 @@ public:
 
 	bool push(const T& element) override
 	{
-		const auto current_position = writer_position.load(mem_relaxed);
-		const auto next_pos = calculateNextPosition(current_position);
-		const auto element2(element);
-		if(isFullWriter())
-		{
-			std::this_thread::yield();
+		const auto current_position = writer_position.load(MEM_RELAXED);
+		const auto next_pos = calculateNextPosition(current_position, queue_size);
+		if(!canWrite(current_position))
 			return false;
-		}
-		*queue[current_position] = std::move(element2);
-		writer_position.store(next_pos, mem_release);
+		new (queue[current_position]) T(element);
+		writer_position.store(next_pos, MEM_RELEASE);
 		return true;
 	}
 
 	bool push(T&& element) override
 	{
-		const auto current_position = writer_position.load(mem_relaxed);
-		auto next_pos = calculateNextPosition(current_position);
-		const auto element2(std::move(element));
-		if(isFullWriter())
-		{
-			std::this_thread::yield();
+		const auto current_position = writer_position.load(MEM_RELAXED);
+		auto next_pos = calculateNextPosition(current_position, queue_size);
+		if(!canWrite(current_position))
 			return false;
-		}
-		*queue[current_position] = std::move(element2);
-		writer_position.store(next_pos, mem_release);
+		new (queue[current_position]) T(std::move(element));
+		writer_position.store(next_pos, MEM_RELEASE);
 		return true;
 	}
 
 	bool pop() override
 	{
-		auto const next_pos = calculateNextPosition(reader_position.load(mem_relaxed));
-		if(isEmptyReader())
-		{
-			std::this_thread::yield();	
+		const auto current_position = reader_position.load(MEM_RELAXED);
+		const auto next_pos = calculateNextPosition(current_position, queue_size);
+		if(!canRead(current_position))
 			return false;
-		}
-		reader_position.store(next_pos, mem_release);
+		reader_position.store(next_pos, MEM_RELEASE);
+		queue[current_position]->~T();
 		return true;
 	}
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		const auto current_position = reader_position.load(mem_relaxed);
+		const auto current_position = reader_position.load(MEM_RELAXED);
 		bool result = function(*queue[current_position]);
-		auto const next_pos = calculateNextPosition(current_position);
-		if(isEmptyReader() | !result)
+		auto const next_pos = calculateNextPosition(current_position, queue_size);
+		if(!canRead(current_position) | !result)
 			return false;
-		reader_position.store(next_pos, mem_release);
+		reader_position.store(next_pos, MEM_RELEASE);
+		queue[current_position]->~T();
 		return true;
 	}
 
@@ -95,28 +89,31 @@ public:
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		auto current_size = getSize();
-		while(current_size > 0)
+		auto current_pos = reader_position.load(MEM_RELAXED);
+		for(auto current_size = availableRead(current_pos); current_size > 0;
+				current_size = availableRead(current_pos))
 		{
-			ConsumeOne(function);
-			--current_size;
+			const int overflow = current_pos + current_size;
+			if(overflow > queue_size)
+			{
+				consume(function, current_pos, queue_size);
+				consume(function, 0, overflow - queue_size);
+				current_pos = calculateNextPosition(overflow - queue_size - 1, queue_size);
+			}
+			else
+			{
+				consume(function, current_pos, overflow);
+				current_pos = calculateNextPosition(overflow - 1, queue_size);
+			}
+			reader_position.store(current_pos, MEM_RELEASE);
 		}
-	}
-
-	template<typename Functor>
-	void ConsumeOne(const Functor& function)
-	{
-		const auto current_position = reader_position.load(mem_relaxed);
-		const auto next_pos = calculateNextPosition(current_position);
-		function(*queue[current_position]);
-		reader_position.store(next_pos, mem_release);
 	}
 
 	const size_t getSize() const override
 	{
-		const auto writer_value = writer_position.load(mem_relaxed);
-		const auto reader_value = reader_position.load(mem_relaxed);
-		return calculateSize(writer_value, reader_value);
+		const auto writer_value = writer_position.load(MEM_ACQUIRE);
+		const auto reader_value = reader_position.load(MEM_ACQUIRE);
+		return availableRead(writer_value, reader_value, queue_size);
 	}
 
 private:
@@ -127,35 +124,55 @@ private:
 			queue[i] = new T();
 	}
 
-	const std::size_t calculateNextPosition(const std::size_t& current_position) const
+	bool canRead(const size_t reader_pos) const
+	{
+		return likely(availableRead(reader_pos) > 0);
+	}
+
+	const size_t availableRead(const size_t reader_pos) const
+	{
+		const auto writer_pos = writer_position.load(MEM_RELAXED);
+		return availableRead(reader_pos, writer_pos, queue_size);
+	}
+
+	bool canWrite(const size_t writer_pos) const
+	{
+		const auto reader_pos = reader_position.load(MEM_RELAXED);
+		return likely(availableRead(reader_pos, writer_pos, queue_size) < queue_size - 1);
+	}
+
+	template<typename Functor>
+	void consume(const Functor& function, const size_t start_index, const size_t end_index) const
+	{
+		for(int i = start_index; i < end_index; ++i)
+		{
+			function(*queue[i]);
+			queue[i]->~T();
+		}
+	}
+
+	static const size_t availableRead(const size_t reader_pos, const size_t writer_pos, const size_t size)
+	{
+		if(writer_pos >= reader_pos)
+			return writer_pos - reader_pos;
+		return writer_pos - reader_pos + size;
+	}
+
+	static const std::size_t calculateNextPosition(const size_t current_position, const size_t size)
 	{
 		size_t ret = current_position + 1;
-		if(unlikely(ret == queue_size))
+		if(unlikely(ret == size))
 			return 0;
 		return ret;
 	}
 
-	bool isEmptyReader() const
-	{
-		return unlikely(getSize() == 0);
-	}
+	static const int padding_size = CACHE_LINE_SIZE - sizeof(size_t);
 
-	bool isFullWriter() const
-	{
-		return unlikely(getSize() == queue_size - 1);
-	}
-
-	const size_t calculateSize(const size_t& writer, const size_t& reader) const
-	{
-		const size_t ret(writer - reader + queue_size);
-		if(writer >= reader)
-			return ret - queue_size;
-		return ret;
-	}
-
-	std::array<T*, queue_size> queue;
 	std::atomic<size_t> reader_position;
+	char padding1[padding_size]; /* force read_index and write_index to different cache lines */
 	std::atomic<size_t> writer_position;
+
+	T* queue[queue_size];
 };
 
 #endif

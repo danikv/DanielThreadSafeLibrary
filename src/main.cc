@@ -5,13 +5,13 @@
 #include <vector>
 #include "spsc_queue.h"
 //#include "growing_spsc_queue.h"
-#include "mpmc_queue.h"
+//#include "mpmc_queue.h"
 #include "blocking_thread_safe_queue.h"
 #include "iblocking_thread_safe_queue.h"
 #include <boost/lockfree/spsc_queue.hpp>
 #include <mutex>
 
-int size = 1000000;
+int size = 100000000;
 std::vector<std::string> results(size);
 std::vector<std::string> randoms(size);
 std::mutex mutex;
@@ -22,11 +22,13 @@ void randomStrings()
 	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 	for(int j = 0; j < size; ++j)
 	{
-		auto element = randoms[j];
-		for(int i = 0; i < 10; ++i)
+		char element [10];
+		for(int i = 0; i < 9; ++i)
 		{
 			element[i] = alpha[rand() % (sizeof(alpha) - 1)];
 		}
+		element[9] = '\0';
+		randoms[j] = element;
 	}	
 }
 
@@ -44,16 +46,14 @@ void reader(QueueType& queue)
 	while (i < size)
 	{
 		static const auto function = [&](const T& element){
-		 	std::lock_guard<std::mutex> locker(mutex);
 			results[i++] = element;
 		};
 		queue.ConsumeAll(function);
 	}
-	std::cout << "finished : " << std::endl;
 }
 
 template<typename T>
-void writer2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<100000>>& queue)
+void writer2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1000>>& queue)
 {
 	for (int j = 0; j < size; ++j)
 	{
@@ -62,7 +62,7 @@ void writer2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<100000>>& q
 }
 
 template<typename T>
-void reader2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<100000>>& queue)
+void reader2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1000>>& queue)
 {
 	int j = 0;
 	while (j < size)
@@ -77,14 +77,14 @@ void reader2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<100000>>& q
 template<typename T>
 void reader3(IBlockingThreadSafeQueue<T>& queue)
 {
-        int i = 0;
-        while (i < size)
-        {
-    		static const auto function = [&](const T& element){
+	int i = 0;
+	while (i < size)
+	{
+		static const auto function = [&](const T& element){
 			results[i++] = element;
-    		};
+		};
 		queue.blockingConsumeAll(function);
-        }
+	}
 
 }
 
@@ -94,32 +94,32 @@ int main()
 {
 	srand(time(NULL));
 	randomStrings();
+	boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<1000>> queue3;
 
-	MpmcQueue<std::string, 200000> queue;
+	std::thread t3(writer2<std::string>, std::ref(queue3));
+	std::thread t4(reader2<std::string>, std::ref(queue3));
 
-        std::thread t1(writer<decltype(queue)>, std::ref(queue));
-        std::thread t2(reader<decltype(queue), std::string>, std::ref(queue));
-	std::thread t3(reader<decltype(queue), std::string>, std::ref(queue));
-	
-        auto start = std::chrono::high_resolution_clock::now();
+	auto start3 = std::chrono::high_resolution_clock::now();
 
-        t1.join();
-        t2.join();
-	t3.join();	
+	t3.join();
+	t4.join();
 
-        auto elapsed = std::chrono::high_resolution_clock::now() - start;
+	auto elapsed3 = std::chrono::high_resolution_clock::now() - start3;
 
-        long long nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
-        std::cout << "time it takes for one var in nano seconds : " << (nanoseconds / size) << std::endl;
+	long long nanoseconds3 = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed3).count();
+	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds3 / size) << std::endl;
 
-        for(int i = 0; i < size; ++i)
-                if(results[i] != randoms[i])
-                        std::cout << "bad" << std::endl;
+	for(int i = 0; i < size; ++i)
+	{
+		if(results[i] != randoms[i])
+			std::cout << "bad" << std::endl;
+	}
+	randomStrings();
 
-/*	SpscQueue<std::string, 100000> queue;
+	SpscQueue<std::string, 1000> queue;
 
-        std::thread t1(writer<decltype(queue)> , std::ref(queue));
-        std::thread t2(reader<decltype(queue), std::string>, std::ref(queue));
+	std::thread t1(writer<decltype(queue)> , std::ref(queue));
+	std::thread t2(reader<decltype(queue), std::string>, std::ref(queue));
 
 	auto start = std::chrono::high_resolution_clock::now();
 
@@ -131,12 +131,12 @@ int main()
 	long long nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
 	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds / size) << std::endl;
 
-        for(int i = 0; i < size; ++i)
-                if(results[i] != randoms[i])
-                        std::cout << "bad" << std::endl;
+	for(int i = 0; i < size; ++i)
+	{
+		if(results[i] != randoms[i])
+			std::cout << "bad" << std::endl;
+	}
 
-		
-	queue.~SpscQueue();
 
 	/*GrowingSpscQueue<int> queue2;
 
@@ -161,27 +161,6 @@ int main()
 
 	queue2.~GrowingSpscQueue();
 */
-/*	randomStrings();
-	boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<100000>> queue3;
-	
-        std::thread t3(writer2<std::string>, std::ref(queue3));
-        std::thread t4(reader2<std::string>, std::ref(queue3));
-
-	auto start3 = std::chrono::high_resolution_clock::now();
-
-	t3.join();
-	t4.join();	
-
-	auto elapsed3 = std::chrono::high_resolution_clock::now() - start3;
-
-	long long nanoseconds3 = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed3).count();
-	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds3 / size) << std::endl;
-
-	for(int i = 0; i < size; ++i)
-		if(results[i] != randoms[i])
-			std::cout << "bad" << std::endl;
-
-	queue3.~spsc_queue();
 
 	/*BlockingThreadSafeQueue<std::string, SpscQueue<std::string, 400000>> queue4(100000);
 
