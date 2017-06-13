@@ -7,7 +7,8 @@
 #include <boost/lockfree/detail/branch_hints.hpp>
 
 #define mem_relaxed std::memory_order_relaxed
-#define mem_acquire	std::memory_order_acquire
+#define mem_acquire std::memory_order_acquire
+#define mem_release std::memory_order_release
 
 using boost::lockfree::detail::unlikely;
 using size_t = std::size_t;
@@ -37,10 +38,14 @@ public:
 	{
 		const auto current_position = writer_position.load(mem_relaxed);
 		const auto next_pos = calculateNextPosition(current_position);
+		const auto element2(element);
 		if(isFullWriter())
+		{
+			std::this_thread::yield();
 			return false;
-		*queue[current_position] = element;
-		writer_position.store(next_pos, mem_relaxed);
+		}
+		*queue[current_position] = std::move(element2);
+		writer_position.store(next_pos, mem_release);
 		return true;
 	}
 
@@ -48,10 +53,14 @@ public:
 	{
 		const auto current_position = writer_position.load(mem_relaxed);
 		auto next_pos = calculateNextPosition(current_position);
+		const auto element2(std::move(element));
 		if(isFullWriter())
-				return false;
-		*queue[current_position] = std::move(element);
-		writer_position.store(next_pos, mem_relaxed);
+		{
+			std::this_thread::yield();
+			return false;
+		}
+		*queue[current_position] = std::move(element2);
+		writer_position.store(next_pos, mem_release);
 		return true;
 	}
 
@@ -59,8 +68,11 @@ public:
 	{
 		auto const next_pos = calculateNextPosition(reader_position.load(mem_relaxed));
 		if(isEmptyReader())
+		{
+			std::this_thread::yield();	
 			return false;
-		reader_position.store(next_pos, mem_relaxed);
+		}
+		reader_position.store(next_pos, mem_release);
 		return true;
 	}
 
@@ -71,7 +83,7 @@ public:
 		auto const next_pos = calculateNextPosition(current_position);
 		if(isEmptyReader() | !result)
 			return false;
-		reader_position.store(next_pos, mem_relaxed);
+		reader_position.store(next_pos, mem_release);
 		return true;
 	}
 
@@ -83,13 +95,11 @@ public:
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		for(auto current_size = getSizeReader(); current_size > 0;)
+		auto current_size = getSize();
+		while(current_size > 0)
 		{
-			while(current_size > 0)
-			{
-				ConsumeOne(function);
-				--current_size;
-			}
+			ConsumeOne(function);
+			--current_size;
 		}
 	}
 
@@ -99,13 +109,13 @@ public:
 		const auto current_position = reader_position.load(mem_relaxed);
 		const auto next_pos = calculateNextPosition(current_position);
 		function(*queue[current_position]);
-		reader_position.store(next_pos, mem_relaxed);
+		reader_position.store(next_pos, mem_release);
 	}
 
 	const size_t getSize() const override
 	{
-		const auto writer_value = writer_position.load(mem_acquire);
-		const auto reader_value = reader_position.load(mem_acquire);
+		const auto writer_value = writer_position.load(mem_relaxed);
+		const auto reader_value = reader_position.load(mem_relaxed);
 		return calculateSize(writer_value, reader_value);
 	}
 
@@ -127,26 +137,12 @@ private:
 
 	bool isEmptyReader() const
 	{
-		return unlikely(getSizeReader() == 0);
+		return unlikely(getSize() == 0);
 	}
 
 	bool isFullWriter() const
 	{
-		return unlikely(getSizeWriter() == queue_size - 1);
-	}
-
-	const size_t getSizeReader() const
-	{
-		const auto writer_value = writer_position.load(mem_acquire);
-        const auto reader_value = reader_position.load(mem_relaxed);
-        return calculateSize(writer_value, reader_value);
-	}
-
-	const size_t getSizeWriter() const
-	{
-		const auto writer_value = writer_position.load(mem_relaxed);
-        const auto reader_value = reader_position.load(mem_acquire);
-        return calculateSize(writer_value, reader_value);
+		return unlikely(getSize() == queue_size - 1);
 	}
 
 	const size_t calculateSize(const size_t& writer, const size_t& reader) const

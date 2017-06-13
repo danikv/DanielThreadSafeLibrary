@@ -59,7 +59,7 @@ public:
 
 	void notifyReaders() override
 	{
-		is_queue_alive.store(false, std::memory_order_acquire);
+		is_queue_alive.store(false, std::memory_order_release);
 		condition.notify_all();
 	}
 	
