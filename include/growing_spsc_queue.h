@@ -2,29 +2,17 @@
 #define GROWINGSPSCQUEUE_H_
 
 #include "ithread_safe_queue.h"
-#include "queue_exceptions.h"
+#include "spsc_queue.h"
 
-template<typename T>
-struct node
-{
-	T* data;
-	node<T>* next;
-	node(): data(nullptr), next(nullptr) {}
-	~node()
-	{
-		if(data != nullptr)
-			delete data;
-	}
-};
+using size_t = std::size_t;
+#define DEFAULT_QUEUE_SIZE 1024
 
 template<typename T>
 class GrowingSpscQueue : public IThreadSafeQueue<T>
 {
 public:
 	GrowingSpscQueue()
-	: end(nullptr)
-	, head(nullptr)
-	, current_queue_size(0)
+	: allocatedBlocks(1)
 	{
 		initalizeQueue();
 	}
@@ -34,86 +22,88 @@ public:
 
 	~GrowingSpscQueue()
 	{
-		while(!isEmpty())
-			unsafePop();
+		delete queue;
 	}
 
-	void push(const T& element) override
+	bool push(const T& element) override
 	{
-		end->data = new T(element);
-		increasePosition();
+		while(!queue->push(element))
+		{
+			allocateMoreSize();
+		}
+		return true;
 	}
 	
-	void push(T&& element) override
+	bool push(T&& element) override
 	{
-		end->data = new T(std::move(element));
-		increasePosition();
+		while(!queue->push(std::move(element)))
+			allocateMoreSize();
+		return true;
 	}
 
-	void pop() override
+	bool pop() override //add compare exchange strong here
 	{
-		throwIfEmpty();
-		unsafePop();
+		if(isRealloc.load(MEM_ACQUIRE))
+			return false;
+		std::atomic_thread_fence(MEM_ACQUIRE);
+		return queue->pop();
 	}
 
-	void popOnSuccses(const std::function<bool(const T&)>& function) override
+	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		throwIfEmpty();
-		if(function(*head->data))
-			unsafePop();
+		if(isRealloc.load(MEM_ACQUIRE))
+			return false;
+		std::atomic_thread_fence(MEM_ACQUIRE);
+		return queue->popOnSuccses(function);
 	}
 	
 	void consumeAll(const std::function<void(const T&)>& function) override
 	{
-		while(!isEmpty())
-		{
-			function(*(head->data));
-			unsafePop();
-		}
+		consumeAll(function);
 	}
 
-	const int getSize() const override
+	template<typename Functor>
+	void ConsumeAll(const Functor& function)
 	{
-		return current_queue_size.load(std::memory_order_acquire);
+		if(isRealloc.load(MEM_ACQUIRE))
+			return;
+		std::atomic_thread_fence(MEM_ACQUIRE);
+		queue->ConsumeAll(function);
+	}
+
+
+	const size_t getSize() const override
+	{
+		if(isRealloc.load(MEM_ACQUIRE))
+			return 0;
+		std::atomic_thread_fence(MEM_ACQUIRE);
+		return queue->getSize();
 	}
 
 private:
 
-	bool isEmpty() const
-	{
-		return getSize() == 0;
-	}
-	
-	void unsafePop()
-	{
-		const auto* element = head;
-		head = head->next;
-		current_queue_size--;
-		delete element;
-	}
-
-	void throwIfEmpty() const
-	{
-		if(isEmpty())
-			throw QueueEmpty();
-	}
-
 	void initalizeQueue()
 	{
-		end = new node<T>();
-		head = end;
+		queue = new SpscQueue<T>(DEFAULT_QUEUE_SIZE);
 	}
 
-	void increasePosition()
+	void allocateMoreSize()
 	{
-		end->next = new node<T>();
-		end = end->next;
-		current_queue_size++;
+		allocatedBlocks *= 2;
+		queue  = new SpscQueue<T>(std::move(*queue), allocatedBlocks *  allocatedBlocks * DEFAULT_QUEUE_SIZE);
+		std::atomic_thread_fence(MEM_RELEASE);
+		isRealloc.store(true, MEM_RELEASE);
+		isRealloc.store(false, MEM_RELAXED);
 	}
 
-	node<T> * end;
-	node<T> * head;
-	std::atomic<int> current_queue_size;		
+	void capacity()
+	{
+		return allocatedBlocks * DEFAULT_QUEUE_SIZE;
+	}
+
+	int allocatedBlocks;
+	std::atomic<bool> isRealloc;
+	SpscQueue<T> * queue;
 };
 
 #endif

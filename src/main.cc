@@ -4,14 +4,14 @@
 #include <thread>
 #include <vector>
 #include "spsc_queue.h"
-//#include "growing_spsc_queue.h"
+#include "growing_spsc_queue.h"
 //#include "mpmc_queue.h"
 #include "blocking_thread_safe_queue.h"
 #include "iblocking_thread_safe_queue.h"
 #include <boost/lockfree/spsc_queue.hpp>
 #include <mutex>
 
-int size = 100000000;
+int size = 10000;
 std::vector<std::string> results(size);
 std::vector<std::string> randoms(size);
 std::mutex mutex;
@@ -36,7 +36,9 @@ template<typename QueueType>
 void writer(QueueType& queue)
 {
 	for (int j = 0; j < size; ++j)
+	{
 		while(!queue.push(randoms[j]));
+	}
 }
 
 template<typename QueueType, typename T>
@@ -53,7 +55,7 @@ void reader(QueueType& queue)
 }
 
 template<typename T>
-void writer2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1000>>& queue)
+void writer2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1024>>& queue)
 {
 	for (int j = 0; j < size; ++j)
 	{
@@ -62,7 +64,7 @@ void writer2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1000>>& que
 }
 
 template<typename T>
-void reader2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1000>>& queue)
+void reader2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1024>>& queue)
 {
 	int j = 0;
 	while (j < size)
@@ -94,7 +96,7 @@ int main()
 {
 	srand(time(NULL));
 	randomStrings();
-	boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<1000>> queue3;
+	boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<1024>> queue3;
 
 	std::thread t3(writer2<std::string>, std::ref(queue3));
 	std::thread t4(reader2<std::string>, std::ref(queue3));
@@ -116,7 +118,7 @@ int main()
 	}
 	randomStrings();
 
-	SpscQueue<std::string, 1000> queue;
+	SpscQueue<std::string> queue(1024);
 
 	std::thread t1(writer<decltype(queue)> , std::ref(queue));
 	std::thread t2(reader<decltype(queue), std::string>, std::ref(queue));
@@ -138,16 +140,16 @@ int main()
 	}
 
 
-	/*GrowingSpscQueue<int> queue2;
+	GrowingSpscQueue<std::string> queue2;
 
 	srand(time(NULL));
-	std::thread t3(writer<GrowingSpscQueue<int>>, std::ref(queue2));
-	std::thread t4(reader<GrowingSpscQueue<int>>, std::ref(queue2));
+	std::thread t5(writer<GrowingSpscQueue<std::string>>, std::ref(queue2));
+	std::thread t6(reader<GrowingSpscQueue<std::string>, std::string>, std::ref(queue2));
 
 	auto start2 = std::chrono::high_resolution_clock::now();
 
-	t3.join();
-	t4.join();
+	t5.join();
+	t6.join();
 
 	auto elapsed2 = std::chrono::high_resolution_clock::now() - start2;
 
@@ -159,8 +161,6 @@ int main()
 		if(results[i] != randoms[i])
 			std::cout << "bad" << std::endl;
 
-	queue2.~GrowingSpscQueue();
-*/
 
 	/*BlockingThreadSafeQueue<std::string, SpscQueue<std::string, 400000>> queue4(100000);
 

@@ -15,25 +15,42 @@ using boost::lockfree::detail::unlikely;
 using boost::lockfree::detail::likely;
 using size_t = std::size_t;
 
-template<typename T, const std::size_t queue_size>
+template<typename T>
 class SpscQueue : public IThreadSafeQueue<T>
 {
 public:
 
-	SpscQueue()
+	SpscQueue(const std::size_t _queue_size)
 	: writer_position(0)
 	, reader_position(0)
+	, queue_size(_queue_size)
 	{
 		initalizeQueue();
 	}
 
-	SpscQueue(SpscQueue<T,queue_size>&) = delete;
-	SpscQueue(SpscQueue<T,queue_size>&&) = default;
+	SpscQueue(SpscQueue<T>&) = delete;
+	SpscQueue(SpscQueue<T>&&) = default;
+
+	//use to initalize to queue with diffrent queue size(used by growing_spsc_queue)
+	SpscQueue(SpscQueue<T>&& _queue, const size_t _queue_size)
+	: writer_position(_queue.writer_position.load(MEM_ACQUIRE))
+	, reader_position(_queue.reader_position.load(MEM_ACQUIRE))
+	, queue_size(_queue_size)
+	{
+		queue = new T*[queue_size];
+		for(int i = 0; i < _queue.queue_size; ++i)
+			queue[i] = new (_queue.queue[i]) T(*_queue.queue[i]);
+		delete [] _queue.queue;
+		_queue.queue = nullptr;
+	}
 
 	~SpscQueue()
 	{
-		for (int i = 0; i < queue_size; ++i)
-			delete queue[i];
+		if(queue != nullptr)
+		{
+			for (int i = 0; i < queue_size; ++i)
+				delete queue[i];
+		}
 	}
 
 	bool push(const T& element) override
@@ -120,6 +137,7 @@ private:
 
 	void initalizeQueue()
 	{
+		queue = new T*[queue_size];
 		for (int i = 0; i < queue_size; ++i)
 			queue[i] = new T();
 	}
@@ -166,13 +184,15 @@ private:
 		return ret;
 	}
 
+	T** queue;
+
 	static const int padding_size = CACHE_LINE_SIZE - sizeof(size_t);
 
 	std::atomic<size_t> reader_position;
-	char padding1[padding_size]; /* force read_index and write_index to different cache lines */
+	char padding1[padding_size]; /* force reader_position and writer_position to different cache lines */
 	std::atomic<size_t> writer_position;
+	const size_t queue_size;
 
-	T* queue[queue_size];
 };
 
 #endif
