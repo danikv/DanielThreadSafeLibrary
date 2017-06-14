@@ -11,7 +11,7 @@
 #include <boost/lockfree/spsc_queue.hpp>
 #include <mutex>
 
-int size = 10000;
+int size = 100000000;
 std::vector<std::string> results(size);
 std::vector<std::string> randoms(size);
 std::mutex mutex;
@@ -112,10 +112,9 @@ int main()
 	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds3 / size) << std::endl;
 
 	for(int i = 0; i < size; ++i)
-	{
 		if(results[i] != randoms[i])
 			std::cout << "bad" << std::endl;
-	}
+
 	randomStrings();
 
 	SpscQueue<std::string> queue(1024);
@@ -134,15 +133,12 @@ int main()
 	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds / size) << std::endl;
 
 	for(int i = 0; i < size; ++i)
-	{
 		if(results[i] != randoms[i])
 			std::cout << "bad" << std::endl;
-	}
 
-
+	randomStrings();
 	GrowingSpscQueue<std::string> queue2;
 
-	srand(time(NULL));
 	std::thread t5(writer<GrowingSpscQueue<std::string>>, std::ref(queue2));
 	std::thread t6(reader<GrowingSpscQueue<std::string>, std::string>, std::ref(queue2));
 

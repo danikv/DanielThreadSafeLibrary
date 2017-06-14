@@ -40,6 +40,8 @@ public:
 		queue = new T*[queue_size];
 		for(int i = 0; i < _queue.queue_size; ++i)
 			queue[i] = new (_queue.queue[i]) T(*_queue.queue[i]);
+		for(int i = _queue.queue_size; i < queue_size; ++i)
+			queue[i] = new T();
 		delete [] _queue.queue;
 		_queue.queue = nullptr;
 	}

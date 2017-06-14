@@ -3,6 +3,7 @@
 
 #include "ithread_safe_queue.h"
 #include "spsc_queue.h"
+#include <mutex>
 
 using size_t = std::size_t;
 #define DEFAULT_QUEUE_SIZE 1024
@@ -28,9 +29,7 @@ public:
 	bool push(const T& element) override
 	{
 		while(!queue->push(element))
-		{
 			allocateMoreSize();
-		}
 		return true;
 	}
 	
@@ -43,17 +42,13 @@ public:
 
 	bool pop() override //add compare exchange strong here
 	{
-		if(isRealloc.load(MEM_ACQUIRE))
-			return false;
-		std::atomic_thread_fence(MEM_ACQUIRE);
+		std::unique_lock<std::mutex> locker(mutex);
 		return queue->pop();
 	}
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		if(isRealloc.load(MEM_ACQUIRE))
-			return false;
-		std::atomic_thread_fence(MEM_ACQUIRE);
+		std::unique_lock<std::mutex> locker(mutex);
 		return queue->popOnSuccses(function);
 	}
 	
@@ -65,18 +60,12 @@ public:
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		if(isRealloc.load(MEM_ACQUIRE))
-			return;
-		std::atomic_thread_fence(MEM_ACQUIRE);
+		std::unique_lock<std::mutex> locker(mutex);
 		queue->ConsumeAll(function);
 	}
 
-
 	const size_t getSize() const override
 	{
-		if(isRealloc.load(MEM_ACQUIRE))
-			return 0;
-		std::atomic_thread_fence(MEM_ACQUIRE);
 		return queue->getSize();
 	}
 
@@ -89,21 +78,19 @@ private:
 
 	void allocateMoreSize()
 	{
+		std::unique_lock<std::mutex> locker(mutex);
 		allocatedBlocks *= 2;
-		queue  = new SpscQueue<T>(std::move(*queue), allocatedBlocks *  allocatedBlocks * DEFAULT_QUEUE_SIZE);
-		std::atomic_thread_fence(MEM_RELEASE);
-		isRealloc.store(true, MEM_RELEASE);
-		isRealloc.store(false, MEM_RELAXED);
+		queue  = new SpscQueue<T>(std::move(*queue), capacity());
 	}
 
-	void capacity()
+	const size_t capacity() const
 	{
 		return allocatedBlocks * DEFAULT_QUEUE_SIZE;
 	}
 
 	int allocatedBlocks;
-	std::atomic<bool> isRealloc;
 	SpscQueue<T> * queue;
+	std::mutex mutex;
 };
 
 #endif
