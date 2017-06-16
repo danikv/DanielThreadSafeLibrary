@@ -59,8 +59,8 @@ public:
 
 	bool push(const T& element) override
 	{
-		const auto current_position = writer_position.load(MEM_RELAXED);
-		const auto next_pos = calculateNextPosition(current_position, queue_size);
+		const size_t current_position = writer_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, queue_size);
 		if(!canWrite(current_position))
 			return false;
 		new (queue[current_position]) T(element);
@@ -70,8 +70,8 @@ public:
 
 	bool push(T&& element) override
 	{
-		const auto current_position = writer_position.load(MEM_RELAXED);
-		auto next_pos = calculateNextPosition(current_position, queue_size);
+		const size_t current_position = writer_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, queue_size);
 		if(!canWrite(current_position))
 			return false;
 		new (queue[current_position]) T(std::move(element));
@@ -81,8 +81,8 @@ public:
 
 	bool pop() override
 	{
-		const auto current_position = reader_position.load(MEM_RELAXED);
-		const auto next_pos = calculateNextPosition(current_position, queue_size);
+		const size_t current_position = reader_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, queue_size);
 		if(!canRead(current_position))
 			return false;
 		increaseReaderPos(current_position, next_pos);
@@ -91,9 +91,9 @@ public:
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		const auto current_position = reader_position.load(MEM_RELAXED);
+		const size_t current_position = reader_position.load(MEM_RELAXED);
 		bool result = function(*queue[current_position]);
-		auto const next_pos = calculateNextPosition(current_position, queue_size);
+		const size_t next_pos = calculateNextPosition(current_position, queue_size);
 		if(!canRead(current_position) | !result)
 			return false;
 		increaseReaderPos(current_position, next_pos);
@@ -108,30 +108,19 @@ public:
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		auto current_pos = reader_position.load(MEM_RELAXED);
-		for(auto current_size = availableRead(current_pos); current_size > 0;
+		size_t current_pos = reader_position.load(MEM_RELAXED);
+		for(size_t current_size = availableRead(current_pos); current_size > 0;
 				current_size = availableRead(current_pos))
 		{
-			const int overflow = current_pos + current_size;
-			if(overflow > queue_size)
-			{
-				consume(function, current_pos, queue_size);
-				consume(function, 0, overflow - queue_size);
-				current_pos = calculateNextPosition(overflow - queue_size - 1, queue_size);
-			}
-			else
-			{
-				consume(function, current_pos, overflow);
-				current_pos = calculateNextPosition(overflow - 1, queue_size);
-			}
+			current_pos = consumeSize(function, current_pos, current_size);
 			reader_position.store(current_pos, MEM_RELEASE);
 		}
 	}
 
 	const size_t getSize() const override
 	{
-		const auto writer_value = writer_position.load(MEM_ACQUIRE);
-		const auto reader_value = reader_position.load(MEM_ACQUIRE);
+		const size_t writer_value = writer_position.load(MEM_ACQUIRE);
+		const size_t reader_value = reader_position.load(MEM_ACQUIRE);
 		return availableRead(reader_value, writer_value, queue_size);
 	}
 
@@ -157,18 +146,35 @@ private:
 
 	const size_t availableRead(const size_t reader_pos) const
 	{
-		const auto writer_pos = writer_position.load(MEM_ACQUIRE);
+		const size_t writer_pos = writer_position.load(MEM_ACQUIRE);
 		return availableRead(reader_pos, writer_pos, queue_size);
 	}
 
 	bool canWrite(const size_t writer_pos) const
 	{
-		const auto reader_pos = reader_position.load(MEM_ACQUIRE);
+		const size_t reader_pos = reader_position.load(MEM_ACQUIRE);
 		return likely(availableRead(reader_pos, writer_pos, queue_size) < queue_size - 1);
 	}
 
 	template<typename Functor>
-	void consume(const Functor& function, const size_t start_index, const size_t end_index) const
+	const size_t consumeSize(const Functor& function, const size_t current_pos, const size_t current_size) const
+	{
+		const size_t end_index = current_pos + current_size;
+		if(end_index > queue_size)
+		{
+			consumeRange(function, current_pos, queue_size);
+			consumeRange(function, 0, end_index - queue_size);
+			return calculateNextPosition(end_index - queue_size - 1, queue_size);
+		}
+		else
+		{
+			consumeRange(function, current_pos, end_index);
+			return calculateNextPosition(end_index - 1, queue_size);
+		}
+	}
+
+	template<typename Functor>
+	void consumeRange(const Functor& function, const size_t start_index, const size_t end_index) const
 	{
 		for(int i = start_index; i < end_index; ++i)
 		{

@@ -31,28 +31,28 @@ public:
 
 	bool push(const T& element) override
 	{
-		while(!writer_queue->push(element))
+		while(unlikely(!writer_queue->push(element)))
 			allocateMoreSize();
 		return true;
 	}
 	
 	bool push(T&& element) override
 	{
-		while(!writer_queue->push(std::move(element)))
+		while(unlikely(!writer_queue->push(std::move(element))))
 			allocateMoreSize();
 		return true;
 	}
 
 	bool pop() override
 	{
-		if(isRealloc.load(MEM_ACQUIRE))
+		if(isQueueChanged())
 			syncQueue();
 		return reader_queue->pop();
 	}
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		if(isRealloc.load(MEM_ACQUIRE))
+		if(isQueueChanged())
 			syncQueue();
 		return reader_queue->popOnSuccses(function);
 	}
@@ -65,7 +65,7 @@ public:
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		if(isRealloc.load(MEM_RELAXED))
+		if(isQueueChanged())
 			syncQueue();
 		reader_queue->ConsumeAll(function);
 	}
@@ -102,12 +102,15 @@ private:
 		isRealloc.store(false, MEM_RELAXED);
 	}
 
-	friend class SpscQueue<T>;
+	bool isQueueChanged() const
+	{
+		return unlikely(isRealloc.load(MEM_ACQUIRE));
+	}
 
 	static const int padding_size = CACHE_LINE_SIZE - sizeof(SpscQueue<T> *);
 
 	SpscQueue<T> * writer_queue;
-	char padding1[padding_size]; /* force reader_position and writer_position to different cache lines */
+	char padding1[padding_size]; /* force writer_queue and reader_queue to different cache lines */
 	SpscQueue<T> * reader_queue;
 	std::atomic<bool> isRealloc;
 	int allocatedBlocks;
