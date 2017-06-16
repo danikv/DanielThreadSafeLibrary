@@ -32,18 +32,20 @@ public:
 	SpscQueue(SpscQueue<T>&&) = default;
 
 	//use to initalize to queue with diffrent queue size(used by growing_spsc_queue)
-	SpscQueue(SpscQueue<T>&& _queue, const size_t _queue_size)
-	: writer_position(_queue.writer_position.load(MEM_ACQUIRE))
-	, reader_position(_queue.reader_position.load(MEM_ACQUIRE))
+	SpscQueue(const SpscQueue<T>& _queue, const size_t _queue_size)
+	: writer_position(_queue.queue_size - 1)
+	, reader_position(0)
 	, queue_size(_queue_size)
 	{
 		queue = new T*[queue_size];
+		size_t reader_pos = reader_position.load(MEM_ACQUIRE);
 		for(int i = 0; i < _queue.queue_size; ++i)
-			queue[i] = new (_queue.queue[i]) T(*_queue.queue[i]);
+		{
+			queue[i] = _queue.queue[reader_pos];
+			reader_pos = calculateNextPosition(reader_pos, _queue.queue_size);
+		}
 		for(int i = _queue.queue_size; i < queue_size; ++i)
 			queue[i] = new T();
-		delete [] _queue.queue;
-		_queue.queue = nullptr;
 	}
 
 	~SpscQueue()
@@ -83,8 +85,7 @@ public:
 		const auto next_pos = calculateNextPosition(current_position, queue_size);
 		if(!canRead(current_position))
 			return false;
-		reader_position.store(next_pos, MEM_RELEASE);
-		queue[current_position]->~T();
+		increaseReaderPos(current_position, next_pos);
 		return true;
 	}
 
@@ -95,8 +96,7 @@ public:
 		auto const next_pos = calculateNextPosition(current_position, queue_size);
 		if(!canRead(current_position) | !result)
 			return false;
-		reader_position.store(next_pos, MEM_RELEASE);
-		queue[current_position]->~T();
+		increaseReaderPos(current_position, next_pos);
 		return true;
 	}
 
@@ -132,7 +132,13 @@ public:
 	{
 		const auto writer_value = writer_position.load(MEM_ACQUIRE);
 		const auto reader_value = reader_position.load(MEM_ACQUIRE);
-		return availableRead(writer_value, reader_value, queue_size);
+		return availableRead(reader_value, writer_value, queue_size);
+	}
+
+	void syncReader(const SpscQueue<T>& _queue)
+	{
+		reader_position.store((_queue.queue_size - 1) - _queue.getSize(), MEM_RELEASE);
+		delete [] _queue.queue;
 	}
 
 private:
@@ -151,13 +157,13 @@ private:
 
 	const size_t availableRead(const size_t reader_pos) const
 	{
-		const auto writer_pos = writer_position.load(MEM_RELAXED);
+		const auto writer_pos = writer_position.load(MEM_ACQUIRE);
 		return availableRead(reader_pos, writer_pos, queue_size);
 	}
 
 	bool canWrite(const size_t writer_pos) const
 	{
-		const auto reader_pos = reader_position.load(MEM_RELAXED);
+		const auto reader_pos = reader_position.load(MEM_ACQUIRE);
 		return likely(availableRead(reader_pos, writer_pos, queue_size) < queue_size - 1);
 	}
 
@@ -184,6 +190,12 @@ private:
 		if(unlikely(ret == size))
 			return 0;
 		return ret;
+	}
+
+	void increaseReaderPos(const size_t current_position, const size_t next_position)
+	{
+		reader_position.store(next_position, MEM_RELEASE);
+		queue[current_position]->~T();
 	}
 
 	T** queue;

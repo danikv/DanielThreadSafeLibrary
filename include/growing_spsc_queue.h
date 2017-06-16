@@ -14,6 +14,7 @@ class GrowingSpscQueue : public IThreadSafeQueue<T>
 public:
 	GrowingSpscQueue()
 	: allocatedBlocks(1)
+	, isRealloc(false)
 	{
 		initalizeQueue();
 	}
@@ -23,64 +24,70 @@ public:
 
 	~GrowingSpscQueue()
 	{
-		delete queue;
+		delete writer_queue;
+		if(reader_queue != writer_queue)
+			delete reader_queue;
 	}
 
 	bool push(const T& element) override
 	{
-		while(!queue->push(element))
+		while(!writer_queue->push(element))
 			allocateMoreSize();
 		return true;
 	}
 	
 	bool push(T&& element) override
 	{
-		while(!queue->push(std::move(element)))
+		while(!writer_queue->push(std::move(element)))
 			allocateMoreSize();
 		return true;
 	}
 
-	bool pop() override //add compare exchange strong here
+	bool pop() override
 	{
-		std::unique_lock<std::mutex> locker(mutex);
-		return queue->pop();
+		if(isRealloc.load(MEM_ACQUIRE))
+			syncQueue();
+		return reader_queue->pop();
 	}
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		std::unique_lock<std::mutex> locker(mutex);
-		return queue->popOnSuccses(function);
+		if(isRealloc.load(MEM_ACQUIRE))
+			syncQueue();
+		return reader_queue->popOnSuccses(function);
 	}
 	
 	void consumeAll(const std::function<void(const T&)>& function) override
 	{
-		consumeAll(function);
+		ConsumeAll(function);
 	}
 
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		std::unique_lock<std::mutex> locker(mutex);
-		queue->ConsumeAll(function);
+		if(isRealloc.load(MEM_RELAXED))
+			syncQueue();
+		reader_queue->ConsumeAll(function);
 	}
 
 	const size_t getSize() const override
 	{
-		return queue->getSize();
+		return 0;
 	}
 
 private:
 
 	void initalizeQueue()
 	{
-		queue = new SpscQueue<T>(DEFAULT_QUEUE_SIZE);
+		writer_queue = new SpscQueue<T>(DEFAULT_QUEUE_SIZE);
+		reader_queue = writer_queue;
 	}
 
 	void allocateMoreSize()
 	{
-		std::unique_lock<std::mutex> locker(mutex);
 		allocatedBlocks *= 2;
-		queue  = new SpscQueue<T>(std::move(*queue), capacity());
+		writer_queue  = new SpscQueue<T>(*writer_queue, capacity());
+		isRealloc.store(true, MEM_RELAXED);
 	}
 
 	const size_t capacity() const
@@ -88,9 +95,22 @@ private:
 		return allocatedBlocks * DEFAULT_QUEUE_SIZE;
 	}
 
+	void syncQueue()
+	{
+		writer_queue->syncReader(*reader_queue);
+		reader_queue = writer_queue;
+		isRealloc.store(false, MEM_RELAXED);
+	}
+
+	friend class SpscQueue<T>;
+
+	static const int padding_size = CACHE_LINE_SIZE - sizeof(SpscQueue<T> *);
+
+	SpscQueue<T> * writer_queue;
+	char padding1[padding_size]; /* force reader_position and writer_position to different cache lines */
+	SpscQueue<T> * reader_queue;
+	std::atomic<bool> isRealloc;
 	int allocatedBlocks;
-	SpscQueue<T> * queue;
-	std::mutex mutex;
 };
 
 #endif

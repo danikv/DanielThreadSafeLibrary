@@ -36,15 +36,13 @@ template<typename QueueType>
 void writer(QueueType& queue)
 {
 	for (int j = 0; j < size; ++j)
-	{
 		while(!queue.push(randoms[j]));
-	}
 }
 
 template<typename QueueType, typename T>
 void reader(QueueType& queue)
 {
-	static int i = 0;
+	int i = 0;
 	while (i < size)
 	{
 		static const auto function = [&](const T& element){
@@ -96,6 +94,7 @@ int main()
 {
 	srand(time(NULL));
 	randomStrings();
+
 	boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<1024>> queue3;
 
 	std::thread t3(writer2<std::string>, std::ref(queue3));
@@ -137,6 +136,7 @@ int main()
 			std::cout << "bad" << std::endl;
 
 	randomStrings();
+
 	GrowingSpscQueue<std::string> queue2;
 
 	std::thread t5(writer<GrowingSpscQueue<std::string>>, std::ref(queue2));
@@ -156,28 +156,4 @@ int main()
 	for(int i = 0; i < size; ++i)
 		if(results[i] != randoms[i])
 			std::cout << "bad" << std::endl;
-
-
-	/*BlockingThreadSafeQueue<std::string, SpscQueue<std::string, 400000>> queue4(100000);
-
-	srand(time(NULL));
-	std::thread t7(writer<BlockingThreadSafeQueue<std::string, SpscQueue<std::string, 400000>>>,
-		 std::ref(queue4));
-	std::thread t8(reader3<std::string>, std::ref(queue4));
-
-	auto start4 = std::chrono::high_resolution_clock::now();
-
-	t7.join();
-queue4.notifyReaders();
-	t8.join();
-
-	auto elapsed4 = std::chrono::high_resolution_clock::now() - start4;
-
-	long long nanoseconds4 = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed4).count();
-	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds4 / size) << std::endl;
-
-	for(int i = 0; i < size; ++i)
-			if(results[i] != randoms[i])
-					std::cout << "bad" << std::endl;
-*/
 }
