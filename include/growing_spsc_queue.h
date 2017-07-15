@@ -2,10 +2,8 @@
 #define GROWINGSPSCQUEUE_H_
 
 #include "ithread_safe_queue.h"
-#include "spsc_queue.h"
-#include <mutex>
+#include "cyclic_buffer.h"
 
-using size_t = std::size_t;
 #define DEFAULT_QUEUE_SIZE 1024
 
 template<typename T>
@@ -14,7 +12,6 @@ class GrowingSpscQueue : public IThreadSafeQueue<T>
 public:
 	GrowingSpscQueue()
 	: allocatedBlocks(1)
-	, isRealloc(false)
 	{
 		initalizeQueue();
 	}
@@ -31,14 +28,14 @@ public:
 
 	bool push(const T& element) override
 	{
-		while(unlikely(!writer_queue->push(element)))
+		while(unlikely(!writer_queue->current->push(element)))
 			allocateMoreSize();
 		return true;
 	}
 	
 	bool push(T&& element) override
 	{
-		while(unlikely(!writer_queue->push(std::move(element))))
+		while(unlikely(!writer_queue->current->push(std::move(element))))
 			allocateMoreSize();
 		return true;
 	}
@@ -47,14 +44,14 @@ public:
 	{
 		if(isQueueChanged())
 			syncQueue();
-		return reader_queue->pop();
+		return reader_queue->current->pop();
 	}
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
 		if(isQueueChanged())
 			syncQueue();
-		return reader_queue->popOnSuccses(function);
+		return reader_queue->current->popOnSuccses(function);
 	}
 	
 	void consumeAll(const std::function<void(const T&)>& function) override
@@ -67,7 +64,7 @@ public:
 	{
 		if(isQueueChanged())
 			syncQueue();
-		reader_queue->ConsumeAll(function);
+		reader_queue->current->ConsumeAll(function);
 	}
 
 	const size_t getSize() const override
@@ -75,44 +72,79 @@ public:
 		return 0;
 	}
 
+	const size_t capacity() const
+	{
+		return allocatedBlocks * DEFAULT_QUEUE_SIZE;
+	}
+
 private:
+	
+
+	struct QueueBlock
+	{
+		QueueBlock(const size_t queue_size)
+		: current(new CyclicBuffer<T>(queue_size))
+		, next(nullptr)
+		{
+		}
+		
+		QueueBlock(const CyclicBuffer<T>& queue, const size_t queue_size)
+		: current(new CyclicBuffer<T>(queue, queue_size))
+		, next(nullptr)
+		{
+		}
+		
+		~QueueBlock()
+		{
+			if(current != nullptr)
+				current->deleteBuffer();
+		}
+
+		CyclicBuffer<T> * current;
+		std::atomic<QueueBlock *> next;
+	};
 
 	void initalizeQueue()
 	{
-		writer_queue = new SpscQueue<T>(DEFAULT_QUEUE_SIZE);
+		writer_queue = new QueueBlock(DEFAULT_QUEUE_SIZE);
 		reader_queue = writer_queue;
 	}
 
 	void allocateMoreSize()
 	{
 		allocatedBlocks *= 2;
-		writer_queue  = new SpscQueue<T>(*writer_queue, capacity());
-		isRealloc.store(true, MEM_RELAXED);
-	}
-
-	const size_t capacity() const
-	{
-		return allocatedBlocks * DEFAULT_QUEUE_SIZE;
+		auto * next_queue = new QueueBlock(*(writer_queue->current), capacity());
+		writer_queue->next.store(next_queue, MEM_RELEASE);
+		writer_queue = next_queue;
 	}
 
 	void syncQueue()
 	{
-		writer_queue->syncReader(*reader_queue);
-		reader_queue = writer_queue;
-		isRealloc.store(false, MEM_RELAXED);
+		const auto * current_reader = reader_queue;
+		reader_queue = reader_queue->next;
+		while(reader_queue->next.load(MEM_ACQUIRE) != nullptr)
+			advanceQueue(&reader_queue);
+		reader_queue->current->syncReader(*(current_reader->current));
+		delete current_reader;
 	}
 
 	bool isQueueChanged() const
 	{
-		return unlikely(isRealloc.load(MEM_ACQUIRE));
+		return unlikely(reader_queue->next.load(MEM_ACQUIRE) != nullptr);
 	}
 
-	static const int padding_size = CACHE_LINE_SIZE - sizeof(SpscQueue<T> *);
+	static void advanceQueue(QueueBlock** const queue)
+	{
+		const auto * current = *queue;
+		*queue = (*queue)->next;
+		delete current;
+	}
 
-	SpscQueue<T> * writer_queue;
+	static const int padding_size = CACHE_LINE_SIZE - sizeof(QueueBlock *);
+
+	QueueBlock * writer_queue;
 	char padding1[padding_size]; /* force writer_queue and reader_queue to different cache lines */
-	SpscQueue<T> * reader_queue;
-	std::atomic<bool> isRealloc;
+	QueueBlock * reader_queue;
 	int allocatedBlocks;
 };
 

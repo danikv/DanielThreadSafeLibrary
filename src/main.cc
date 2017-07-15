@@ -93,7 +93,7 @@ void reader3(IBlockingThreadSafeQueue<T>& queue)
 int main()
 {
 	srand(time(NULL));
-	randomStrings();
+	/*randomStrings();
 
 	boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<1024>> queue3;
 
@@ -133,7 +133,7 @@ int main()
 
 	for(int i = 0; i < size; ++i)
 		if(results[i] != randoms[i])
-			std::cout << "bad" << std::endl;
+			std::cout << "bad" << std::endl;*/
 
 	randomStrings();
 
@@ -152,8 +152,14 @@ int main()
 	long long nanoseconds2 = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed2).count();
 
 	std::cout << "time it takes for one var in nano seconds : " << (nanoseconds2 / size) << std::endl;
-
+	int j = 0;
 	for(int i = 0; i < size; ++i)
 		if(results[i] != randoms[i])
-			std::cout << "bad" << std::endl;
+			j = i;
+	if(j != 0)
+		for(int i = j - 100; i < j + 100; ++i)
+			std::cout << "pushed : " << randoms[i] << " , received : " << results[i] << std::endl;
+	
+	std::cout << "J : " << j << std::endl;
+	std::cout << "capacity : " << queue2.capacity() << std::endl;
 }
