@@ -28,30 +28,32 @@ public:
 
 	bool push(const T& element) override
 	{
-		while(unlikely(!writer_queue->current->push(element)))
+		while(unlikely(!writer_queue->push(element)))
 			allocateMoreSize();
 		return true;
 	}
 	
 	bool push(T&& element) override
 	{
-		while(unlikely(!writer_queue->current->push(std::move(element))))
+		while(unlikely(!writer_queue->push(std::move(element))))
 			allocateMoreSize();
 		return true;
 	}
 
 	bool pop() override
 	{
-		if(isQueueChanged())
-			syncQueue();
-		return reader_queue->current->pop();
+		auto * queue = last_used_queue.load(MEM_ACQUIRE);
+		if(isQueueChanged(queue))
+			syncQueue(queue);
+		return reader_queue->pop();
 	}
 
 	bool popOnSuccses(const std::function<bool(const T&)>& function) override
 	{
-		if(isQueueChanged())
-			syncQueue();
-		return reader_queue->current->popOnSuccses(function);
+		auto * queue = last_used_queue.load(MEM_ACQUIRE);
+		if(isQueueChanged(queue))
+			syncQueue(queue);
+		return reader_queue->popOnSuccses(function);
 	}
 	
 	void consumeAll(const std::function<void(const T&)>& function) override
@@ -62,9 +64,10 @@ public:
 	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
-		if(isQueueChanged())
-			syncQueue();
-		reader_queue->current->ConsumeAll(function);
+		auto * queue = last_used_queue.load(MEM_ACQUIRE);
+		if(isQueueChanged(queue))
+			syncQueue(queue);
+		reader_queue->ConsumeAll(function);
 	}
 
 	const size_t getSize() const override
@@ -78,74 +81,45 @@ public:
 	}
 
 private:
-	
-
-	struct QueueBlock
-	{
-		QueueBlock(const size_t queue_size)
-		: current(new CyclicBuffer<T>(queue_size))
-		, next(nullptr)
-		{
-		}
-		
-		QueueBlock(const CyclicBuffer<T>& queue, const size_t queue_size)
-		: current(new CyclicBuffer<T>(queue, queue_size))
-		, next(nullptr)
-		{
-		}
-		
-		~QueueBlock()
-		{
-			if(current != nullptr)
-				current->deleteBuffer();
-		}
-
-		CyclicBuffer<T> * current;
-		std::atomic<QueueBlock *> next;
-	};
 
 	void initalizeQueue()
 	{
-		writer_queue = new QueueBlock(DEFAULT_QUEUE_SIZE);
+		writer_queue = new CyclicBuffer<T>(DEFAULT_QUEUE_SIZE);
 		reader_queue = writer_queue;
+		last_used_queue.store(nullptr, MEM_RELAXED);
 	}
 
 	void allocateMoreSize()
 	{
 		allocatedBlocks *= 2;
-		auto * next_queue = new QueueBlock(*(writer_queue->current), capacity());
-		writer_queue->next.store(next_queue, MEM_RELEASE);
-		writer_queue = next_queue;
+		auto * new_queue = new CyclicBuffer<T>(*(writer_queue), capacity());
+		if(last_used_queue.compare_exchange_strong(writer_queue, new_queue, MEM_RELEASE, MEM_RELAXED))
+			writer_queue->deleteBuffer();
+		else
+			last_used_queue.store(new_queue, MEM_RELEASE);
+		writer_queue = new_queue;
 	}
 
-	void syncQueue()
+	void syncQueue(CyclicBuffer<T> * queue)
 	{
-		const auto * current_reader = reader_queue;
-		reader_queue = reader_queue->next;
-		while(reader_queue->next.load(MEM_ACQUIRE) != nullptr)
-			advanceQueue(&reader_queue);
-		reader_queue->current->syncReader(*(current_reader->current));
-		delete current_reader;
+		while(!last_used_queue.compare_exchange_strong(queue, nullptr, MEM_RELEASE, MEM_RELAXED));
+		queue->syncReader(*reader_queue);
+		reader_queue->deleteBuffer();
+		reader_queue = queue;
 	}
-
-	bool isQueueChanged() const
+	
+	bool isQueueChanged(const CyclicBuffer<T> * queue) const
 	{
-		return unlikely(reader_queue->next.load(MEM_ACQUIRE) != nullptr);
+		return unlikely(queue != nullptr);
 	}
 
-	static void advanceQueue(QueueBlock** const queue)
-	{
-		const auto * current = *queue;
-		*queue = (*queue)->next;
-		delete current;
-	}
+	static const int padding_size = CACHE_LINE_SIZE - sizeof(CyclicBuffer<T> *);
 
-	static const int padding_size = CACHE_LINE_SIZE - sizeof(QueueBlock *);
-
-	QueueBlock * writer_queue;
+	CyclicBuffer<T> * writer_queue;
 	char padding1[padding_size]; /* force writer_queue and reader_queue to different cache lines */
-	QueueBlock * reader_queue;
+	CyclicBuffer<T> * reader_queue;
 	int allocatedBlocks;
+	std::atomic<CyclicBuffer<T> *> last_used_queue;
 };
 
 #endif

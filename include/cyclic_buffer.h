@@ -36,7 +36,7 @@ public:
 	, buffer_size(_buffer_size)
 	{
 		buffer = new T*[buffer_size];
-		const size_t reader_pos = reader_position.load(MEM_RELAXED);
+		const size_t reader_pos = reader_position.load(MEM_ACQUIRE);
 		const size_t read_size = _buffer.buffer_size - reader_pos;
 		if(reader_pos != 0)
 		{
@@ -123,10 +123,11 @@ public:
 
 	void syncReader(const CyclicBuffer<T>& _buffer)
 	{
-		reader_position.store((_buffer.buffer_size - 1) - _buffer.getSize(), MEM_RELEASE);
+		reader_position.store((_buffer.buffer_size - 1) - 
+				_buffer.availableRead(_buffer.reader_position.load(MEM_RELAXED)), MEM_RELEASE);
 	}
 
-	void deleteBuffer()
+	void deleteBuffer() const
 	{
 		delete [] buffer;
 	}
