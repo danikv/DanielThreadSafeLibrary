@@ -155,21 +155,8 @@ int main()
 	int j = 0;
 	for(int i = 0; i < size; ++i)
 		if(results[i] != randoms[i])
-			j = i;
+			std::cout << "bad" << std::endl;
 	
-	std::ofstream file_stream("daniel.txt");
-	if(j != 0)
-	{
-		for(int i = 0; i < size; ++i)
-			if(randoms[i] == results[j])
-				file_stream << "matching element found : " << randoms[i] << " , in position : " 
-				<< i << " , " << j << std::endl;
-		for(int i = 0; i < size; ++i)
-			if(randoms[j] == results[i])
-				file_stream << "matching element found : " << randoms[j] << " , in position : " 
-				<< i << " , " << j << std::endl;
-	}
 	
-	std::cout << "J : " << j << std::endl;
 	std::cout << "capacity : " << queue2.capacity() << std::endl;
 }

@@ -36,12 +36,12 @@ public:
 	, buffer_size(_buffer_size)
 	{
 		buffer = new T*[buffer_size];
-		const size_t reader_pos = reader_position.load(MEM_ACQUIRE);
+		const size_t reader_pos = _buffer.reader_position.load(MEM_ACQUIRE);
 		const size_t read_size = _buffer.buffer_size - reader_pos;
 		if(reader_pos != 0)
 		{
-			memcpy(buffer, _buffer.buffer[reader_pos], sizeof(T*) * (read_size));
-			memcpy(buffer[read_size], _buffer.buffer, sizeof(T*) * (reader_pos));
+			memcpy(buffer, &_buffer.buffer[reader_pos], sizeof(T*) * (read_size));
+			memcpy(&buffer[read_size], _buffer.buffer, sizeof(T*) * (reader_pos));
 		}
 		else
 			memcpy(buffer, _buffer.buffer, sizeof(T*) * _buffer.buffer_size);
