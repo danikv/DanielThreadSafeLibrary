@@ -4,6 +4,8 @@
 #include <atomic>
 #include <boost/lockfree/detail/branch_hints.hpp>
 #include <cstring>
+#include <memory>
+#include "queue_exceptions.h"
 
 #define MEM_RELAXED std::memory_order_relaxed
 #define MEM_ACQUIRE std::memory_order_acquire
@@ -91,7 +93,30 @@ public:
 		return true;
 	}
 
-	bool popOnSuccses(const std::function<bool(const T&)>& function)
+	bool tryPop(T& element)
+	{
+		const size_t current_position = reader_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
+		if(!canRead(current_position))
+			return false;
+		element = std::move(*buffer[current_position]);
+		increaseReaderPos(current_position, next_pos);
+		return true;
+	}
+	
+	std::unique_ptr<T> tryPop()
+	{
+		const size_t current_position = reader_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
+		if(!canRead(current_position))
+			return nullptr;
+		auto element = std::make_unique<T>(std::move(*buffer[current_position]));
+		increaseReaderPos(current_position, next_pos);
+		return element;
+	}
+	
+	template<typename Functor>
+	bool popOnSuccses(const Functor& function)
 	{
 		const size_t current_position = reader_position.load(MEM_RELAXED);
 		bool result = function(*buffer[current_position]);
@@ -103,6 +128,18 @@ public:
 	}
 
 	template<typename Functor>
+	void ConsumeOne(const Functor& function)
+	{
+		const size_t current_position = reader_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
+		if(!canRead(current_position))
+			return false;
+		function(*buffer[current_position]);
+		increaseReaderPos(current_position, next_pos);
+		return true;
+	}
+	
+	template<typename Functor>
 	void ConsumeAll(const Functor& function)
 	{
 		size_t current_pos = reader_position.load(MEM_RELAXED);
@@ -113,14 +150,37 @@ public:
 			reader_position.store(current_pos, MEM_RELEASE);
 		}
 	}
-
-	const size_t getSize() const
+	
+	//should be only used by the consumer , returns true when the queue isnt empty otherwise false
+	bool canRead() const
 	{
-		const size_t writer_value = writer_position.load(MEM_ACQUIRE);
-		const size_t reader_value = reader_position.load(MEM_ACQUIRE);
-		return availableRead(reader_value, writer_value, buffer_size);
+		return canRead(reader_position.load(MEM_RELAXED));
 	}
 
+	//should be only used by the producer , returns true when the queue isnt full otherwise false
+	bool canWrite() const
+	{
+		return canWrite(writer_position.load(MEM_RELAXED));
+	}
+	
+	
+	/*
+	 * those functions should not be used by the users
+	 */
+	void unSafePush(const T& element)
+	{
+		const size_t current_position = writer_position.load(MEM_RELAXED);
+		new (buffer[current_position]) T(element);
+		writer_position.store(calculateNextPosition(current_position, buffer_size), MEM_RELEASE);
+	}
+	
+	void unSafePush(T&& element)
+	{
+		const size_t current_position = writer_position.load(MEM_RELAXED);
+		new (buffer[current_position]) T(std::move(element));
+		writer_position.store(calculateNextPosition(current_position, buffer_size), MEM_RELEASE);
+	}
+	
 	void syncReader(const CyclicBuffer<T>& _buffer)
 	{
 		reader_position.store((_buffer.buffer_size - 1) - 

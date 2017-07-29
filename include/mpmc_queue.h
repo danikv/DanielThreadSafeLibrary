@@ -2,7 +2,6 @@
 #ifndef MPMCQUEUE_H_
 #define MPMCQUEUE_H_
 
-#include "ithread_safe_queue.h"
 #include <atomic>
 #include <array>
 #include <boost/lockfree/detail/branch_hints.hpp>
@@ -17,7 +16,7 @@ using boost::lockfree::detail::unlikely;
 using size_t = std::size_t;
 
 template<typename T, const size_t queue_size>
-class MpmcQueue : public IThreadSafeQueue<T>
+class MpmcQueue
 {
 
 public:
@@ -37,7 +36,7 @@ public:
 			delete queue[i];		
 	}
 
-	bool push(const T& element) override
+	bool push(const T& element)
 	{
 		auto current_position = writer_position.load(MEM_RELAXED);
 		auto next_position = calculateNext(current_position);
@@ -56,7 +55,7 @@ public:
 		return true;
 	}
 
-	bool push(T&& element) override
+	bool push(T&& element)
 	{
 		auto current_position = writer_position.load(MEM_RELAXED);
                 auto next_position = calculateNext(current_position);
@@ -76,7 +75,7 @@ public:
 
 	}
 
-	bool pop() override
+	bool pop()
 	{
 		auto current_position = reader_position.load(MEM_RELAXED);
                 auto next_position = calculateNext(current_position);
@@ -93,12 +92,12 @@ public:
 		return true;
 	}
 
-	bool popOnSuccses(const std::function<bool(const T&)>& function) override
+	bool popOnSuccses(const std::function<bool(const T&)>& function)
 	{
 		return true;
 	}
 
-	void consumeAll(const std::function<void(const T&)>& function) override
+	void consumeAll(const std::function<void(const T&)>& function)
 	{
 		//ConsumeAll(function);
 	}

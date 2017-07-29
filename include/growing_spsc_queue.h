@@ -1,13 +1,12 @@
 #ifndef GROWINGSPSCQUEUE_H_
 #define GROWINGSPSCQUEUE_H_
 
-#include "ithread_safe_queue.h"
 #include "cyclic_buffer.h"
 
 #define DEFAULT_QUEUE_SIZE 1024
 
 template<typename T>
-class GrowingSpscQueue : public IThreadSafeQueue<T>
+class GrowingSpscQueue
 {
 public:
 	GrowingSpscQueue()
@@ -26,53 +25,68 @@ public:
 			delete reader_queue;
 	}
 
-	bool push(const T& element) override
+	/*
+	 * push function cannot fail , they can only throw exception when there is no more memory to allocate
+	 */
+	void push(const T& element)
 	{
-		while(unlikely(!writer_queue->push(element)))
-			allocateMoreSize();
-		return true;
+		allocateSizeIfNeeded();
+		writer_queue->unSafePush(element);
 	}
 	
-	bool push(T&& element) override
+	void push(T&& element)
 	{
-		while(unlikely(!writer_queue->push(std::move(element))))
-			allocateMoreSize();
-		return true;
+		allocateSizeIfNeeded();
+		writer_queue->unSafePush(std::move(element));
 	}
 
-	bool pop() override
+	bool pop()
 	{
-		auto * queue = last_used_queue.load(MEM_ACQUIRE);
-		if(isQueueChanged(queue))
-			syncQueue(queue);
+		syncReaderQueue();
 		return reader_queue->pop();
 	}
-
-	bool popOnSuccses(const std::function<bool(const T&)>& function) override
+	
+	/*
+	 * this function will not throw but it can fail and will return false if so otherwise true and element will contain
+	 * a value
+	 */
+	bool tryPop(T& element)
 	{
-		auto * queue = last_used_queue.load(MEM_ACQUIRE);
-		if(isQueueChanged(queue))
-			syncQueue(queue);
-		return reader_queue->popOnSuccses(function);
+		syncReaderQueue();
+		return reader_queue->tryPop(element);
 	}
 	
-	void consumeAll(const std::function<void(const T&)>& function) override
+	//this function will not throw but it can fail and will reutnr nullptr if so , otherwise unique_ptr with the value
+	std::unique_ptr<T> tryPop()
 	{
-		ConsumeAll(function);
+		syncReaderQueue();
+		return reader_queue->tryPop();
 	}
 
 	template<typename Functor>
-	void ConsumeAll(const Functor& function)
+	bool popOnSuccses(const Functor& function)
 	{
-		auto * queue = last_used_queue.load(MEM_ACQUIRE);
-		if(isQueueChanged(queue))
-			syncQueue(queue);
+		syncReaderQueue();
+		return reader_queue->popOnSuccses(function);
+	}
+
+	template<typename Functor>
+	void consumeAll(const Functor& function)
+	{
+		syncReaderQueue();
 		reader_queue->ConsumeAll(function);
 	}
 
-	const size_t getSize() const override
+	//should be only used by the consumer , returns true when the queue isnt empty otherwise false
+	bool canRead() const
 	{
-		return 0;
+		return reader_queue->canRead();
+	}
+
+	//should be only used by the producer , returns true when the queue isnt full otherwise false
+	bool canWrite() const
+	{
+		return writer_queue->canWrite();
 	}
 
 	const size_t capacity() const
@@ -102,7 +116,7 @@ private:
 
 	void syncQueue(CyclicBuffer<T> * queue)
 	{
-		while(!last_used_queue.compare_exchange_strong(queue, nullptr, MEM_RELEASE, MEM_RELAXED));
+		while(!last_used_queue.compare_exchange_weak(queue, nullptr, MEM_ACQUIRE, MEM_RELAXED));
 		queue->syncReader(*reader_queue);
 		reader_queue->deleteBuffer();
 		reader_queue = queue;
@@ -112,14 +126,27 @@ private:
 	{
 		return unlikely(queue != nullptr);
 	}
+	
+	void syncReaderQueue()
+	{
+		auto * queue = last_used_queue.load(MEM_RELAXED);
+		if(isQueueChanged(queue))
+			syncQueue(queue);
+	}
+	
+	void allocateSizeIfNeeded()
+	{
+		if(!canWrite())
+			allocateMoreSize();
+	}
 
 	static const int padding_size = CACHE_LINE_SIZE - sizeof(CyclicBuffer<T> *);
 
-	CyclicBuffer<T> * writer_queue;
-	char padding1[padding_size]; /* force writer_queue and reader_queue to different cache lines */
 	CyclicBuffer<T> * reader_queue;
-	int allocatedBlocks;
 	std::atomic<CyclicBuffer<T> *> last_used_queue;
+	char padding1[padding_size]; /* force writer_queue and reader_queue to different cache lines */
+	CyclicBuffer<T> * writer_queue;
+	int allocatedBlocks;
 };
 
 #endif

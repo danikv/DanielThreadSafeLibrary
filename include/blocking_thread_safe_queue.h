@@ -4,12 +4,11 @@
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
-#include "iblocking_thread_safe_queue.h"
 
 using size_t = std::size_t;
 
 template<typename T, typename QueueType>
-class BlockingThreadSafeQueue : public IBlockingThreadSafeQueue<T>
+class BlockingThreadSafeQueue
 {
 
 public:
@@ -19,36 +18,36 @@ public:
 	{
 	}
 
-	bool push(const T& element) override
+	bool push(const T& element)
 	{
 		bool result = queue.push(element);
 		if(unlikely(shouldNotify() && result))
 			condition.notify_one();
 	}
 	
-	bool push(T&& element) override
+	bool push(T&& element)
 	{
 		bool result = queue.push(std::move(element));
 		if(unlikely(shouldNotify() && result))
 			condition.notify_one();
 	}
 	
-	bool pop() override
+	bool pop()
 	{
 		return queue.pop();
 	}
 	
-	bool popOnSuccses(const std::function<bool(const T&)>& function) override
+	bool popOnSuccses(const std::function<bool(const T&)>& function)
 	{
 		return queue.popOnSuccses(function);
 	}
 	
-	void consumeAll(const std::function<void(const T&)>& function) override
+	void consumeAll(const std::function<void(const T&)>& function)
 	{
 		queue.consumeAll(function);
 	}
 	
-	void blockingConsumeAll(const std::function<void(const T&)>& function) override
+	void blockingConsumeAll(const std::function<void(const T&)>& function)
 	{
 		std::unique_lock<std::mutex> lock(locker);
 		condition.wait(lock, [&]() {

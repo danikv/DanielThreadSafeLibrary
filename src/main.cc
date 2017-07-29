@@ -6,12 +6,10 @@
 #include "spsc_queue.h"
 #include "growing_spsc_queue.h"
 //#include "mpmc_queue.h"
-#include "blocking_thread_safe_queue.h"
-#include "iblocking_thread_safe_queue.h"
 #include <boost/lockfree/spsc_queue.hpp>
 #include <mutex>
 
-int size = 10000000;
+int size = 20000000;
 std::vector<std::string> results(size);
 std::vector<std::string> randoms(size);
 std::mutex mutex;
@@ -36,7 +34,7 @@ template<typename QueueType>
 void writer(QueueType& queue)
 {
 	for (int j = 0; j < size; ++j)
-		while(!queue.push(randoms[j]));
+		queue.push(randoms[j]);
 }
 
 template<typename QueueType, typename T>
@@ -48,7 +46,7 @@ void reader(QueueType& queue)
 		static const auto function = [&](const T& element){
 			results[i++] = element;
 		};
-		queue.ConsumeAll(function);
+		queue.consumeAll(function);
 	}
 }
 
@@ -72,20 +70,6 @@ void reader2(boost::lockfree::spsc_queue<T,boost::lockfree::capacity<1024>>& que
 		};
 		queue.consume_all(function);
 	}
-}
-
-template<typename T>
-void reader3(IBlockingThreadSafeQueue<T>& queue)
-{
-	int i = 0;
-	while (i < size)
-	{
-		static const auto function = [&](const T& element){
-			results[i++] = element;
-		};
-		queue.blockingConsumeAll(function);
-	}
-
 }
 
 
