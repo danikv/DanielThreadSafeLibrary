@@ -74,7 +74,7 @@ public:
 	void consumeAll(const Functor& function)
 	{
 		syncReaderQueue();
-		reader_queue->ConsumeAll(function);
+		reader_queue->consumeAll(function);
 	}
 
 	//should be only used by the consumer , returns true when the queue isnt empty otherwise false

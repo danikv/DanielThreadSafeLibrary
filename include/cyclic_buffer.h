@@ -16,6 +16,26 @@ using boost::lockfree::detail::unlikely;
 using boost::lockfree::detail::likely;
 using size_t = std::size_t;
 
+template<class T>
+struct copy_function
+{
+	T* element;
+	void operator ()(T&& current) const
+	{
+		*element = current;
+	}
+};
+
+template<class T>
+struct move_function
+{
+	T* element;
+	T&& operator ()() const
+	{
+		return std::move(element);
+	}
+};
+
 template<typename T>
 class CyclicBuffer
 {
@@ -78,41 +98,30 @@ public:
 		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
 		if(!canWrite(current_position))
 			return false;
-		new (buffer[current_position]) T(std::move(element));
+		new (buffer[current_position]) T(element);
 		writer_position.store(next_pos, MEM_RELEASE);
 		return true;
 	}
 
 	bool pop()
 	{
-		const size_t current_position = reader_position.load(MEM_RELAXED);
-		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
-		if(!canRead(current_position))
-			return false;
-		increaseReaderPos(current_position, next_pos);
-		return true;
+		return consumeOne([]{});
 	}
 
 	bool tryPop(T& element)
 	{
-		const size_t current_position = reader_position.load(MEM_RELAXED);
-		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
-		if(!canRead(current_position))
-			return false;
-		element = std::move(*buffer[current_position]);
-		increaseReaderPos(current_position, next_pos);
-		return true;
+		return consumeOne([&element](T&& current){
+			element = current;
+		});
 	}
 	
 	std::unique_ptr<T> tryPop()
 	{
-		const size_t current_position = reader_position.load(MEM_RELAXED);
-		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
-		if(!canRead(current_position))
-			return nullptr;
-		auto element = std::make_unique<T>(std::move(*buffer[current_position]));
-		increaseReaderPos(current_position, next_pos);
-		return element;
+		T * returned_element = nullptr;
+		consumeOne([&returned_element](T&& current){
+			returned_element = new T(std::move(current));
+		});
+		return std::unique_ptr<T>(returned_element);
 	}
 	
 	template<typename Functor>
@@ -128,19 +137,19 @@ public:
 	}
 
 	template<typename Functor>
-	void ConsumeOne(const Functor& function)
+	bool consumeOne(const Functor& function)
 	{
 		const size_t current_position = reader_position.load(MEM_RELAXED);
 		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
 		if(!canRead(current_position))
 			return false;
-		function(*buffer[current_position]);
+		function(std::move(*buffer[current_position]));
 		increaseReaderPos(current_position, next_pos);
 		return true;
 	}
 	
 	template<typename Functor>
-	void ConsumeAll(const Functor& function)
+	void consumeAll(const Functor& function)
 	{
 		size_t current_pos = reader_position.load(MEM_RELAXED);
 		for(size_t current_size = availableRead(current_pos); current_size > 0;
@@ -170,15 +179,17 @@ public:
 	void unSafePush(const T& element)
 	{
 		const size_t current_position = writer_position.load(MEM_RELAXED);
+		const size_t next_position = calculateNextPosition(current_position, buffer_size);
 		new (buffer[current_position]) T(element);
-		writer_position.store(calculateNextPosition(current_position, buffer_size), MEM_RELEASE);
+		writer_position.store(next_position, MEM_RELEASE);
 	}
 	
 	void unSafePush(T&& element)
 	{
 		const size_t current_position = writer_position.load(MEM_RELAXED);
-		new (buffer[current_position]) T(std::move(element));
-		writer_position.store(calculateNextPosition(current_position, buffer_size), MEM_RELEASE);
+		const size_t next_position = calculateNextPosition(current_position, buffer_size);
+		new (buffer[current_position]) T(element);
+		writer_position.store(next_position, MEM_RELEASE);
 	}
 	
 	void syncReader(const CyclicBuffer<T>& _buffer)
@@ -240,7 +251,7 @@ private:
 	{
 		for(int i = start_index; i < end_index; ++i)
 		{
-			function(*buffer[i]);
+			function(std::move(*buffer[i]));
 			buffer[i]->~T();
 		}
 	}
@@ -264,6 +275,18 @@ private:
 	{
 		reader_position.store(next_position, MEM_RELEASE);
 		buffer[current_position]->~T();
+	}
+	
+	template<typename Functor>
+	bool push(const Functor& function)
+	{
+		const size_t current_position = writer_position.load(MEM_RELAXED);
+		const size_t next_pos = calculateNextPosition(current_position, buffer_size);
+		if(!canWrite(current_position))
+			return false;
+		new (buffer[current_position]) T(function());
+		writer_position.store(next_pos, MEM_RELEASE);
+		return true;
 	}
 
 	T** buffer;

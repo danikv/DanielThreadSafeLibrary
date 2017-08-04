@@ -41,9 +41,10 @@ template<typename QueueType, typename T>
 void reader(QueueType& queue)
 {
 	int i = 0;
+	int old_i = 0;
 	while (i < size)
 	{
-		static const auto function = [&](const T& element){
+		static const auto function = [&](T&& element){
 			results[i++] = element;
 		};
 		queue.consumeAll(function);

@@ -61,7 +61,7 @@ public:
 	template<typename Functor>
 	void consumeAll(const Functor& function)
 	{
-		queue.ConsumeAll(function);
+		queue.consumeAll(function);
 	}
 	
 	//should be only used by the consumer , returns true when the queue isnt empty otherwise false
