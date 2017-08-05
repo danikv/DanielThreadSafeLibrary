@@ -16,27 +16,7 @@ using boost::lockfree::detail::unlikely;
 using boost::lockfree::detail::likely;
 using size_t = std::size_t;
 
-template<class T>
-struct copy_function
-{
-	T* element;
-	void operator ()(T&& current) const
-	{
-		*element = current;
-	}
-};
-
-template<class T>
-struct move_function
-{
-	T* element;
-	T&& operator ()() const
-	{
-		return std::move(element);
-	}
-};
-
-template<typename T>
+template <class T>
 class CyclicBuffer
 {
 public:
@@ -124,7 +104,7 @@ public:
 		return std::unique_ptr<T>(returned_element);
 	}
 	
-	template<typename Functor>
+	template <typename Functor>
 	bool popOnSuccses(const Functor& function)
 	{
 		const size_t current_position = reader_position.load(MEM_RELAXED);
@@ -136,7 +116,7 @@ public:
 		return true;
 	}
 
-	template<typename Functor>
+	template <typename Functor>
 	bool consumeOne(const Functor& function)
 	{
 		const size_t current_position = reader_position.load(MEM_RELAXED);
@@ -148,7 +128,7 @@ public:
 		return true;
 	}
 	
-	template<typename Functor>
+	template <typename Functor>
 	void consumeAll(const Functor& function)
 	{
 		size_t current_pos = reader_position.load(MEM_RELAXED);
@@ -229,7 +209,7 @@ private:
 		return likely(availableRead(reader_pos, writer_pos, buffer_size) < buffer_size - 1);
 	}
 
-	template<typename Functor>
+	template <typename Functor>
 	const size_t consumeSize(const Functor& function, const size_t current_pos, const size_t consumed_size) const
 	{
 		const size_t end_index = current_pos + consumed_size;
@@ -246,7 +226,7 @@ private:
 		}
 	}
 
-	template<typename Functor>
+	template <typename Functor>
 	void consumeRange(const Functor& function, const size_t start_index, const size_t end_index) const
 	{
 		for(int i = start_index; i < end_index; ++i)
@@ -277,7 +257,7 @@ private:
 		buffer[current_position]->~T();
 	}
 	
-	template<typename Functor>
+	template <typename Functor>
 	bool push(const Functor& function)
 	{
 		const size_t current_position = writer_position.load(MEM_RELAXED);

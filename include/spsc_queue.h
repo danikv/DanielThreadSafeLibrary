@@ -3,7 +3,7 @@
 
 #include "cyclic_buffer.h"
 
-template<typename T>
+template <class T>
 class SpscQueue
 {
 public:

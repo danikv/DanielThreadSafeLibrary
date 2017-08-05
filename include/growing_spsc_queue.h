@@ -5,7 +5,7 @@
 
 #define DEFAULT_QUEUE_SIZE 1024
 
-template<typename T>
+template <class T>
 class GrowingSpscQueue
 {
 public:
